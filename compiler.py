@@ -1,4 +1,4 @@
-import sys, os, struct, hashlib, re, time, shutil, math, CA
+import sys, os, struct, hashlib, json, re, time, shutil, math, CA
 import const as C
 from BS import compile_all
 from CA import rd, wr, todo, _parse_code
@@ -507,7 +507,7 @@ def _parse_bytes_arg(s, enc="cp932"):
 def _scan_dir(p):
     fs = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
     fs.sort(key=lambda x: x.lower())
-    ini = [f for f in fs if os.path.splitext(f)[1].lower() in (".ini", ".dat", ".txt")]
+    ini = [f for f in fs if os.path.splitext(f)[1].lower() in (".ini", ".dat")]
     inc = [f for f in fs if f.lower().endswith(".inc")]
     ss = [os.path.join(p, f) for f in fs if f.lower().endswith(".ss")]
     return ini, inc, ss
@@ -628,6 +628,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="sse", add_help=True)
     ap.add_argument("input_dir")
     ap.add_argument("output_pck")
+    ap.add_argument("--tmp", dest="tmp_dir", default="")
     ap.add_argument(
         "--charset", default="", help="Force source charset (jis/cp932 or utf8)."
     )
@@ -665,11 +666,17 @@ def main(argv=None):
         return 1
     os.makedirs(out, exist_ok=True)
     tmp = ""
+    tmp_auto = False
     if not a.gei:
-        tmp = os.path.join(
-            out, "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        )
-        os.makedirs(tmp, exist_ok=True)
+        if getattr(a, "tmp_dir", ""):
+            tmp = os.path.abspath(a.tmp_dir)
+            os.makedirs(tmp, exist_ok=True)
+        else:
+            tmp_auto = True
+            tmp = os.path.join(
+                out, "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            )
+            os.makedirs(tmp, exist_ok=True)
     ini, inc, ss = _scan_dir(inp)
     charset = _norm_charset(a.charset) if getattr(a, "charset", None) else ""
     CA.U = charset
@@ -728,9 +735,99 @@ def main(argv=None):
             angou_hdr = os.path.join(tmp, "EXE_ANGOU.h")
             if os.path.isfile(angou_hdr):
                 _record_output(ctx, angou_hdr, "EXE_ANGOU.h")
-            compile_all(ctx, ss, "bs")
+            compile_list = ss
+            md5_path = ""
+            cur_inc = {}
+            cur_ss = {}
+            if getattr(a, "tmp_dir", ""):
+
+                def _md5_file(p):
+                    h = hashlib.md5()
+                    with open(p, "rb") as f:
+                        while True:
+                            b = f.read(1024 * 1024)
+                            if not b:
+                                break
+                            h.update(b)
+                    return h.hexdigest()
+
+                md5_path = os.path.join(tmp, "_md5.json")
+                for f in inc or []:
+                    p = os.path.join(inp, f)
+                    if os.path.isfile(p):
+                        cur_inc[str(f).lower()] = _md5_file(p)
+                for p in ss or []:
+                    if os.path.isfile(p):
+                        cur_ss[os.path.basename(p).lower()] = _md5_file(p)
+                old = None
+                if os.path.isfile(md5_path):
+                    try:
+                        old = json.loads(rd(md5_path, 0, enc="utf-8"))
+                    except Exception:
+                        old = None
+                full_compile = False
+                if not isinstance(old, dict):
+                    full_compile = True
+                else:
+                    old_inc = old.get("inc") or {}
+                    for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
+                        if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
+                            full_compile = True
+                            break
+                bs_dir = os.path.join(tmp, "bs")
+                if full_compile:
+                    if (not a.no_angou) and os.path.isdir(bs_dir):
+                        for fn in os.listdir(bs_dir):
+                            if str(fn).lower().endswith(".lzss"):
+                                try:
+                                    os.remove(os.path.join(bs_dir, fn))
+                                except Exception:
+                                    pass
+                    compile_list = ss
+                else:
+                    old_ss = old.get("ss") or {}
+                    comp = set()
+                    for p in ss or []:
+                        b = os.path.basename(p).lower()
+                        nm = os.path.splitext(os.path.basename(p))[0]
+                        dat_path = os.path.join(bs_dir, nm + ".dat")
+                        lz_path = os.path.join(bs_dir, nm + ".lzss")
+                        need = False
+                        if not os.path.isfile(dat_path):
+                            need = True
+                        elif (not a.no_angou) and (not os.path.isfile(lz_path)):
+                            need = True
+                        elif str(cur_ss.get(b, "")) != str(old_ss.get(b, "")):
+                            need = True
+                        if need:
+                            comp.add(p)
+                    compile_list = sorted(
+                        comp, key=lambda x: os.path.basename(x).lower()
+                    )
+                    if (not a.no_angou) and os.path.isdir(bs_dir):
+                        for p in compile_list or []:
+                            nm = os.path.splitext(os.path.basename(p))[0]
+                            lp = os.path.join(bs_dir, nm + ".lzss")
+                            if os.path.isfile(lp):
+                                try:
+                                    os.remove(lp)
+                                except Exception:
+                                    pass
+            if compile_list:
+                compile_all(ctx, compile_list, "bs")
             pp = link_pack(ctx)
             _record_output(ctx, pp, ctx.get("scene_pck"))
+            if md5_path:
+                wr(
+                    md5_path,
+                    json.dumps(
+                        {"inc": cur_inc, "ss": cur_ss},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    0,
+                    enc="utf-8",
+                )
         ok = True
     except Exception as e:
         msg = str(e) if e is not None else ""
@@ -740,7 +837,7 @@ def main(argv=None):
         ok = False
     finally:
         _print_summary(ctx)
-        if ok and (not a.debug) and tmp:
+        if ok and (not a.debug) and tmp and tmp_auto:
             shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1
 

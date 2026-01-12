@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] (-c|-x|-a|-k) [args]\n")
+    out.write(f"usage: {p} [-h] (-c|-x|-a|-k|-e) [args]\n")
     out.write("\n")
     out.write("Modes:\n")
     out.write("  -c, --compile   Compile scripts\n")
@@ -20,10 +20,11 @@ def _usage(out=None):
     )
     out.write("  -a, --analyze   Analyze/compare files\n")
     out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
+    out.write("  -e, --exec      Execute at a #z label\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset=ENC] [--no-os] [--no-angou] <input_dir> <output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
     out.write("\n")
@@ -37,13 +38,16 @@ def _usage(out=None):
     out.write("\n")
     out.write("KOE mode:\n")
     out.write(f"  {p} -k <ss_dir> <ovk_dir> <output_dir>\n")
+    out.write("\n")
+    out.write("Execute mode:\n")
+    out.write(f"  {p} -e <path_to_engine> <path_to_ss> <label>\n")
 
 
 def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] (-c|-x|-a|-k) [args]\n")
+    out.write(f"usage: {p} [-h] (-c|-x|-a|-k|-e) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -117,6 +121,14 @@ def main(argv=None):
         import koe_collector
 
         rc = koe_collector.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-e", "--exec", "--execute"):
+        import exec
+
+        rc = exec.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
