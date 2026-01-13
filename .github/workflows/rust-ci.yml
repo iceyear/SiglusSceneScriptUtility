@@ -40,15 +40,21 @@ jobs:
           tool_name: rustfmt
 
       - name: Apply Fixes
+        id: apply_fixes
         if: github.event_name == 'push'
         run: |
           cd src/siglus_scene_script_utility/rust
           cargo fmt
           cargo clippy --fix --allow-dirty --allow-staged
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Pull Request for Fixes
         id: cpr
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.apply_fixes.outputs.changes == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -59,7 +65,7 @@ jobs:
           delete-branch: true
 
       - name: Permission Error Hint
-        if: failure() && steps.cpr.outcome == 'failure'
+        if: failure() && steps.cpr.outcome == 'failure' && steps.apply_fixes.outputs.changes == 'true'
         run: |
           echo "::error::Auto-PR failed (403). Please check your repository settings:"
           echo "::error::1. Go to Settings -> Actions -> General"
