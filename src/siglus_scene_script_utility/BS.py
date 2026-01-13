@@ -141,6 +141,17 @@ def _record_stage_time(ctx, stage, elapsed):
         pass
 
 
+def _set_stage_time(ctx, stage, elapsed):
+    try:
+        if not isinstance(ctx, dict):
+            return
+        stats = ctx.setdefault("stats", {})
+        timings = stats.setdefault("stage_time", {})
+        timings[stage] = float(elapsed)
+    except Exception:
+        pass
+
+
 def build_ia_data(ctx):
     sp = ctx.get("scn_path") or ""
     inc_list = ctx.get("inc_list") or []
@@ -1845,7 +1856,9 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
         try:
             from .parallel import parallel_compile
 
+            start = time.time()
             parallel_compile(ctx, ss_files, stop_after, max_workers)
+            _set_stage_time(ctx, "Compiling", time.time() - start)
             return
         except ImportError:
             # Fall back to serial if parallel module not available

@@ -33,6 +33,17 @@ def _record_stage_time(ctx, stage, elapsed):
         pass
 
 
+def _set_stage_time(ctx, stage, elapsed):
+    try:
+        if not isinstance(ctx, dict):
+            return
+        stats = ctx.setdefault("stats", {})
+        timings = stats.setdefault("stage_time", {})
+        timings[stage] = float(elapsed)
+    except Exception:
+        pass
+
+
 def _rel_win(base, path):
     return os.path.relpath(path, base).replace("/", "\\")
 
@@ -179,9 +190,12 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
         try:
             from .parallel import parallel_lzss_compress
 
-            return parallel_lzss_compress(
+            start = time.time()
+            result = parallel_lzss_compress(
                 ctx, scn_names, bs_dir, lzss_mode, max_workers
             )
+            _set_stage_time(ctx, "LZSS", time.time() - start)
+            return result
         except ImportError:
             # Fall back to serial if parallel module not available
             pass
@@ -363,9 +377,11 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         try:
             from .parallel import parallel_source_encrypt
 
+            start = time.time()
             sizes, chunks = parallel_source_encrypt(
                 ctx, rel_list, scn_path, tmp_path, skip, max_workers
             )
+            _set_stage_time(ctx, "OS", time.time() - start)
             if not sizes:
                 return (0, [])
             size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
