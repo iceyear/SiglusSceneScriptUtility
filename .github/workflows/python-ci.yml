@@ -26,11 +26,10 @@ jobs:
         run: uv sync
 
       - name: Ruff Lint with Reviewdog
-        uses: reviewdog/action-ruff@v1
+        uses: benny123tw/action-ruff@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-pr-review
-          filter_mode: added
 
       - name: Ruff Format
         run: uv run ruff format .
