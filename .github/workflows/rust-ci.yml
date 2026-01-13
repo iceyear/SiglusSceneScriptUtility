@@ -11,7 +11,7 @@ jobs:
     name: Lint & Format
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Clippy with Reviewdog
+        if: github.event_name == 'pull_request'
         uses: giraffate/clippy-action@v1
         with:
           reporter: 'github-pr-review'
@@ -46,6 +47,7 @@ jobs:
           cargo clippy --fix --allow-dirty --allow-staged
 
       - name: Create Pull Request for Fixes
+        id: cpr
         if: github.event_name == 'push'
         uses: peter-evans/create-pull-request@v6
         with:
@@ -55,6 +57,14 @@ jobs:
           body: "This PR contains automatic fixes for Rust lint (clippy) and formatting issues found after a direct push."
           branch: "fix-rust-style-${{ github.ref_name }}"
           delete-branch: true
+
+      - name: Permission Error Hint
+        if: failure() && steps.cpr.outcome == 'failure'
+        run: |
+          echo "::error::Auto-PR failed (403). Please check your repository settings:"
+          echo "::error::1. Go to Settings -> Actions -> General"
+          echo "::error::2. Set 'Workflow permissions' to 'Read and write permissions'"
+          echo "::error::3. Check 'Allow GitHub Actions to create and approve pull requests'"
 
   rust-tests:
     name: Tests
