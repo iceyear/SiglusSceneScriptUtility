@@ -24,7 +24,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
     out.write("\n")
@@ -81,7 +81,7 @@ def main(argv=None):
     if mode in ("-a", "--analyze"):
         from . import analyze
 
-        rc = analyze.main(argv[1:])  # Assuming analyze has a main function
+        rc = analyze.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc

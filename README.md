@@ -42,8 +42,11 @@ You can use the `siglus-ssu` command directly through `uv run`:
 # Display help
 uv run siglus-ssu --help
 
-# Compile scripts
+# Compile scripts (serial by default)
 uv run siglus-ssu -c <input_dir> <output_dir>
+
+# Enable parallel compilation if needed
+uv run siglus-ssu -c --parallel [--max-workers N] <input_dir> <output_dir>
 
 # Extract PCK files
 uv run siglus-ssu -x <input_pck> <output_dir>

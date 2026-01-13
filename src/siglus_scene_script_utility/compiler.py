@@ -354,6 +354,17 @@ def main(argv=None):
         "--no-angou", action="store_true", help="No encrypt/compress (header_size=0)."
     )
     ap.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Enable parallel compilation (default: off).",
+    )
+    ap.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum parallel workers for compilation (default: auto).",
+    )
+    ap.add_argument(
         "--lzss-level",
         type=int,
         default=17,
@@ -529,7 +540,13 @@ def main(argv=None):
                                 except Exception:
                                     pass
             if compile_list:
-                compile_all(ctx, compile_list, "bs")
+                compile_all(
+                    ctx,
+                    compile_list,
+                    "bs",
+                    max_workers=a.max_workers,
+                    parallel=a.parallel,
+                )
             pp = link_pack(ctx)
             _record_output(ctx, pp, ctx.get("scene_pck"))
             if md5_path:
