@@ -1326,9 +1326,17 @@ def main(argv=None):
     args = list(argv)
     if (not args) or args[0] in ("-h", "--help", "help"):
         return 2
+    gei = False
+    if "--gei" in args:
+        args.remove("--gei")
+        gei = True
     if "--dat-txt" in args:
         args.remove("--dat-txt")
         globals()["DAT_TXT_OUT_DIR"] = "__DATDIR__"
+    if gei:
+        if len(args) != 1:
+            return 2
+        return analyze_gameexe_dat(args[0])
     if len(args) == 1:
         return analyze_file(args[0])
     if len(args) == 2:

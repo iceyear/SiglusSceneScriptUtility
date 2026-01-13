@@ -6,9 +6,9 @@ import glob
 from . import const as C
 from .CA import rd, wr, _parse_code
 from . import compiler
-from .native_ops import (
-    lzss_unpack
-)
+from . import GEI
+from .native_ops import lzss_unpack
+
 
 def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
     if not code:
@@ -379,8 +379,6 @@ def main(argv=None):
     if len(args) != 2 or args[0] in ("-h", "--help", "help"):
         return 2
     if gei:
-        import GEI
-
         exe_el = _compute_exe_el(os.path.dirname(os.path.abspath(args[0])))
         try:
             out_path = GEI.restore_gameexe_ini(args[0], args[1], exe_el=exe_el)
