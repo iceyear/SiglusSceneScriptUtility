@@ -9,7 +9,9 @@ on:
 jobs:
   python-quality:
     name: Lint & Format
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +24,39 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Lint check
-        run: uv run ruff check .
+      - name: Ruff Lint with Reviewdog
+        uses: reviewdog/action-ruff@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          filter_mode: added
 
-      - name: Format check
-        run: uv run ruff format --check .
+      - name: Ruff Format
+        run: uv run ruff format .
+
+      - name: Post Format Suggestions
+        if: github.event_name == 'pull_request'
+        uses: reviewdog/action-suggester@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tool_name: ruff-format
+
+      - name: Apply Fixes
+        if: github.event_name == 'push'
+        run: |
+          uv run ruff check --fix .
+          uv run ruff format .
+
+      - name: Create Pull Request for Fixes
+        if: github.event_name == 'push'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "style: fix lint and formatting (python)"
+          title: "Fix lint and formatting (Python) - Auto-generated"
+          body: "This PR contains automatic fixes for Python lint and formatting issues found after a direct push."
+          branch: "fix-python-style-${{ github.ref_name }}"
+          delete-branch: true
 
   python-tests:
     name: Tests

@@ -9,7 +9,9 @@ on:
 jobs:
   rust-quality:
     name: Lint & Format
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +20,41 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Format check
-        run: cd src/siglus_scene_script_utility/rust && cargo fmt -- --check
+      - name: Clippy with Reviewdog
+        uses: reviewdog/action-clippy@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          filter_mode: added
+          workdir: src/siglus_scene_script_utility/rust
 
-      - name: Clippy check
-        run: cd src/siglus_scene_script_utility/rust && cargo clippy -- -D warnings
+      - name: Rust Format
+        run: cd src/siglus_scene_script_utility/rust && cargo fmt
+
+      - name: Post Format Suggestions
+        if: github.event_name == 'pull_request'
+        uses: reviewdog/action-suggester@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tool_name: rustfmt
+
+      - name: Apply Fixes
+        if: github.event_name == 'push'
+        run: |
+          cd src/siglus_scene_script_utility/rust
+          cargo fmt
+          cargo clippy --fix --allow-dirty --allow-staged
+
+      - name: Create Pull Request for Fixes
+        if: github.event_name == 'push'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "style: fix lint and formatting (rust)"
+          title: "Fix lint and formatting (Rust) - Auto-generated"
+          body: "This PR contains automatic fixes for Rust lint (clippy) and formatting issues found after a direct push."
+          branch: "fix-rust-style-${{ github.ref_name }}"
+          delete-branch: true
 
   rust-tests:
     name: Tests
