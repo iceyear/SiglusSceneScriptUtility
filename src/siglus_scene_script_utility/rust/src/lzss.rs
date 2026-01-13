@@ -22,7 +22,7 @@ struct LzssTree {
 
 impl LzssTree {
     fn new(tree_size: usize) -> Self {
-        let n = tree_size + 2;
+            let n = tree_size + 2;
         let unused = tree_size + 1;
         let root = tree_size;
 
