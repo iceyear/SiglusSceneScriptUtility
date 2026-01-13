@@ -45,7 +45,7 @@ def _usage(out=None):
     out.write(f"  {p} -k <ss_dir> <ovk_dir> <output_dir>\n")
     out.write("\n")
     out.write("Execute mode:\n")
-    out.write(f"  {p} -e <path_to_engine> <path_to_ss> <label>\n")
+    out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
 
 
 def _usage_short(out=None):

@@ -152,7 +152,10 @@ cython_debug/
 tmp_*/
 __DATDIR__/
 output_*/
+work_*/
 暗号.dat
+*.lzss
+*.exe
 *.pck
 *.ss.dat
 *.ss.dis

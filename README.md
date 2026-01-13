@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility
 
-This utility aims to reproduce SiglusEngine’s scene-script compilation bit-for-bit, along with other related features.
+This utility aims to reproduce SiglusEngine’s scene script compilation bit-for-bit, along with other related features.
 
 ## Installation
 
@@ -51,7 +51,7 @@ uv run siglus-ssu -x <input_pck> <output_dir>
 uv run siglus-ssu -a <file1> [file2]
 
 # Force pure Python implementation (disable Rust accel)
-uv run siglus-ssu --legacy -c <input_dir> <output_dir>
+uv run siglus-ssu -c --legacy <input_dir> <output_dir>
 ```
 
 ## Project Structure
@@ -121,6 +121,6 @@ Run the benchmark script to measure performance improvements:
 uv run python tests/benchmark.py
 ```
 
-### Tips for scene script editing
+## Tips for scene script editing
 
-If you type something in a .ss file that would break tokenization, wrap it in double quotes so it’s treated as a literal.
+If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.

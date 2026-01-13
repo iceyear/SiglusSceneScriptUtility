@@ -17,10 +17,13 @@ def main(argv=None):
     args = list(argv)
     if len(args) != 3:
         return 2
-    engine_path, ss_path, zlabel = args
+    engine_path, ss_name, zlabel = args
     engine_path = _strip_quotes(engine_path)
-    ss_path = _strip_quotes(ss_path)
+    ss_name = _strip_quotes(ss_name)
     zlabel = _strip_quotes(zlabel)
+    if os.path.basename(ss_name) != ss_name:
+        sys.stderr.write("Invalid scene name: %s\n" % ss_name)
+        return 2
     label = str(zlabel).strip()
     if label.startswith("#"):
         label = label[1:]
@@ -35,7 +38,7 @@ def main(argv=None):
         sys.stderr.write("Invalid zlabel: %s\n" % zlabel)
         return 2
     label = str(label_i)
-    ss = os.path.basename(ss_path)
+    ss = ss_name
     if ss.lower().endswith(".ss"):
         ss = ss[:-3]
     else:
