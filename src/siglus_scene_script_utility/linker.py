@@ -268,10 +268,24 @@ def _pack_i32_pairs(pairs):
     return bytes(out)
 
 
+def _to_int_form(value):
+    if isinstance(value, str):
+        if value in C._FORM_CODE:
+            return int(C._FORM_CODE[value])
+        raise ValueError(f"invalid form value: {value!r}")
+    return int(value)
+
+
 def _pack_inc_props(props):
     out = bytearray()
-    for p in props:
-        out.extend(struct.pack("<ii", int(p.get("form", 0)), int(p.get("size", 0))))
+    for idx, p in enumerate(props):
+        try:
+            form = _to_int_form(p.get("form", 0))
+        except Exception as exc:
+            raise ValueError(
+                f"inc_prop_list[{idx}].form invalid: {p.get('form', 0)!r}"
+            ) from exc
+        out.extend(struct.pack("<ii", form, int(p.get("size", 0))))
     return bytes(out)
 
 
