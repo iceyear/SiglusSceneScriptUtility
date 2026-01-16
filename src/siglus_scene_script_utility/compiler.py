@@ -12,7 +12,6 @@ from .BS import (
     compile_one,
     set_shuffle_seed,
     build_ia_data,
-    _MSVCRand,
 )
 from . import CA
 from .CA import rd, wr, todo, _parse_code
@@ -302,7 +301,6 @@ def _read_scn_dat_str_pool(path):
             bb[i * 2 + 1] = (v >> 8) & 0xFF
         out.append(bytes(bb).decode("utf-16le", "surrogatepass"))
     return out
-
 
 
 def _scan_dir(p):
@@ -778,6 +776,7 @@ def main(argv=None):
                         f"[test-shuffle] parallel scan starting at seed={seed0}\n"
                     )
                     from .parallel import find_shuffle_seed_parallel
+
                     cand = find_shuffle_seed_parallel(targets[0], seed0)
                     seed = int(cand) & 0xFFFFFFFF
                     sys.stderr.write(

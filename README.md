@@ -46,7 +46,6 @@ Common modes and examples:
 | Compile | Build scripts into `.pck` | `uv run siglus-ssu -c <input_dir> <output_dir>` |
 | Extract | Unpack `.pck` files | `uv run siglus-ssu -x <input_pck> <output_dir>` |
 | Analyze/compare | Inspect or diff files | `uv run siglus-ssu -a <file1> [file2]` |
-| Legacy | Force pure Python mode | `uv run siglus-ssu --legacy -c <input_dir> <output_dir>` |
 
 ## Project Structure
 

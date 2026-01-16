@@ -15,6 +15,10 @@ jobs:
       pull-requests: write
       checks: write
     steps:
+      - name: Configure git for CRLF
+        run: |
+          git config --global core.autocrlf true
+          git config --global core.eol crlf
       - uses: actions/checkout@v4
 
       - name: Install uv
@@ -72,6 +76,10 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
+      - name: Configure git for CRLF
+        run: |
+          git config --global core.autocrlf true
+          git config --global core.eol crlf
       - uses: actions/checkout@v4
 
       - name: Install uv

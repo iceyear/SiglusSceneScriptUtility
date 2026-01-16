@@ -4,8 +4,8 @@ mod tile;
 mod xor;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyByteArray, PyBytes};
 use pyo3::types::PyList;
+use pyo3::types::{PyByteArray, PyBytes};
 
 /// LZSS compression with default level (17)
 #[pyfunction]
