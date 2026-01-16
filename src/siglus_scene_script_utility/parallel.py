@@ -471,3 +471,147 @@ def parallel_source_encrypt(
 
     print(f"[PARALLEL] Source encryption complete: {len(sizes)} files")
     return (sizes, chunks)
+
+
+# =============================================================================
+# Parallel seed scan for --test-shuffle
+# =============================================================================
+
+
+def _seed_chunk_worker(args):
+    """Process worker: scan a contiguous seed range for a matching MSVC shuffle."""
+    seed_start, count, n, target = args
+    # Import locally to keep the function picklable on Windows (spawn)
+    from .BS import _MSVCRand
+
+    n = int(n)
+    target = list(target)
+    ss = int(seed_start)
+    cc = int(count)
+    for s in range(ss, ss + cc):
+        rng = _MSVCRand(int(s) & 0xFFFFFFFF)
+        a = list(range(n))
+        rng.shuffle(a)
+        if a == target:
+            return int(s) & 0xFFFFFFFF
+    return None
+
+
+def find_shuffle_seed_parallel(
+    target_order,
+    seed0,
+    *,
+    workers=None,
+    chunk=None,
+    progress_iv=None,
+):
+    """Find MSVC-compatible shuffle seed in parallel.
+
+    This powers compiler.py --test-shuffle.
+
+    Environment overrides (kept for backwards-compat):
+      - SSU_TEST_SHUFFLE_WORKERS
+      - SSU_TEST_SHUFFLE_CHUNK
+      - SSU_TEST_SHUFFLE_PROGRESS
+
+    Args:
+        target_order: target permutation list[int]
+        seed0: starting seed (inclusive)
+        workers: number of processes (None => env/auto)
+        chunk: seeds per process per round (None => env/default)
+        progress_iv: seconds between progress logs (None => env/default)
+
+    Returns:
+        matched seed as 32-bit int
+    """
+    import concurrent.futures
+    import sys
+    import time
+
+    target = list(target_order)
+    n = len(target)
+
+    # workers
+    if workers is None:
+        try:
+            workers = int(os.environ.get("SSU_TEST_SHUFFLE_WORKERS", "") or 0)
+        except Exception:
+            workers = 0
+        if not workers:
+            workers = get_max_workers(None)
+    workers = max(1, int(workers))
+
+    # chunk
+    if chunk is None:
+        try:
+            chunk = int(os.environ.get("SSU_TEST_SHUFFLE_CHUNK", "") or 0)
+        except Exception:
+            chunk = 0
+        if not chunk:
+            chunk = 200
+    chunk = max(1, int(chunk))
+
+    # progress interval
+    if progress_iv is None:
+        try:
+            progress_iv = float(os.environ.get("SSU_TEST_SHUFFLE_PROGRESS", "") or 0)
+        except Exception:
+            progress_iv = 0.0
+        if progress_iv <= 0:
+            progress_iv = 1.0
+
+    cur = int(seed0) & 0xFFFFFFFF
+    t0 = time.time()
+    last = t0
+    scanned = 0
+    sys.stderr.write(
+        f"[test-shuffle] seed scan: workers={workers} chunk={chunk} start={cur}\n"
+    )
+    sys.stderr.flush()
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
+        while True:
+            futs = []
+            for w in range(workers):
+                st = (cur + w * chunk) & 0xFFFFFFFF
+                futs.append(ex.submit(_seed_chunk_worker, (st, chunk, n, target)))
+
+            found = None
+            for fut in concurrent.futures.as_completed(futs):
+                r = fut.result()
+                if r is not None:
+                    found = int(r) & 0xFFFFFFFF
+                    break
+
+            if found is not None:
+                # Best-effort cancel remaining futures in this round
+                for fut in futs:
+                    try:
+                        fut.cancel()
+                    except Exception:
+                        pass
+                elapsed = time.time() - t0
+                if elapsed <= 0:
+                    elapsed = 1e-9
+                approx_scanned = scanned + workers * chunk
+                rate = approx_scanned / elapsed
+                sys.stderr.write(
+                    f"[test-shuffle] seed found={found} scanned~{approx_scanned} elapsed={elapsed:.2f}s rate~{rate:.0f}/s\n"
+                )
+                sys.stderr.flush()
+                return found
+
+            scanned += workers * chunk
+            now = time.time()
+            if now - last >= progress_iv:
+                elapsed = now - t0
+                if elapsed <= 0:
+                    elapsed = 1e-9
+                rate = scanned / elapsed
+                sys.stderr.write(
+                    f"[test-shuffle] scanned={scanned} elapsed={elapsed:.1f}s rate~{rate:.0f}/s next_seed={cur}\n"
+                )
+                sys.stderr.flush()
+                last = now
+
+            cur = (cur + workers * chunk) & 0xFFFFFFFF

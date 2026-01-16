@@ -304,104 +304,6 @@ def _read_scn_dat_str_pool(path):
     return out
 
 
-def _seed_chunk_worker(args):
-    seed_start, count, n, target = args
-    n = int(n)
-    target = list(target)
-    for s in range(int(seed_start), int(seed_start) + int(count)):
-        rng = _MSVCRand(int(s) & 0xFFFFFFFF)
-        a = list(range(n))
-        rng.shuffle(a)
-        if a == target:
-            return int(s) & 0xFFFFFFFF
-    return None
-
-
-def _find_seed_parallel(target, seed0, *, workers=None, chunk=None):
-    # Note: on Windows, multiprocessing uses spawn; keep worker at module top-level.
-    import concurrent.futures
-
-    n = len(target)
-    if workers is None:
-        try:
-            workers = int(os.environ.get("SSU_TEST_SHUFFLE_WORKERS", "") or 0)
-        except Exception:
-            workers = 0
-        if not workers:
-            workers = os.cpu_count() or 1
-    workers = max(1, int(workers))
-
-    if chunk is None:
-        try:
-            chunk = int(os.environ.get("SSU_TEST_SHUFFLE_CHUNK", "") or 0)
-        except Exception:
-            chunk = 0
-        if not chunk:
-            chunk = 200
-    chunk = max(1, int(chunk))
-
-    try:
-        progress_iv = float(os.environ.get("SSU_TEST_SHUFFLE_PROGRESS", "") or 0)
-    except Exception:
-        progress_iv = 0.0
-    if progress_iv <= 0:
-        progress_iv = 1.0
-
-    cur = int(seed0) & 0xFFFFFFFF
-    t0 = time.time()
-    last = t0
-    scanned = 0
-    sys.stderr.write(
-        f"[test-shuffle] seed scan: workers={workers} chunk={chunk} start={cur}\n"
-    )
-    sys.stderr.flush()
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
-        while True:
-            futs = []
-            for w in range(workers):
-                st = (cur + w * chunk) & 0xFFFFFFFF
-                futs.append(ex.submit(_seed_chunk_worker, (st, chunk, n, target)))
-
-            found = None
-            for fut in concurrent.futures.as_completed(futs):
-                r = fut.result()
-                if r is not None:
-                    found = int(r) & 0xFFFFFFFF
-                    break
-
-            if found is not None:
-                for fut in futs:
-                    try:
-                        fut.cancel()
-                    except Exception:
-                        pass
-                elapsed = time.time() - t0
-                if elapsed <= 0:
-                    elapsed = 1e-9
-                approx_scanned = scanned + workers * chunk
-                rate = approx_scanned / elapsed
-                sys.stderr.write(
-                    f"[test-shuffle] seed found={found} scanned~{approx_scanned} elapsed={elapsed:.2f}s rate~{rate:.0f}/s\n"
-                )
-                sys.stderr.flush()
-                return found
-
-            scanned += workers * chunk
-            now = time.time()
-            if now - last >= progress_iv:
-                elapsed = now - t0
-                if elapsed <= 0:
-                    elapsed = 1e-9
-                rate = scanned / elapsed
-                sys.stderr.write(
-                    f"[test-shuffle] scanned={scanned} elapsed={elapsed:.1f}s rate~{rate:.0f}/s next_seed={cur}\n"
-                )
-                sys.stderr.flush()
-                last = now
-
-            cur = (cur + workers * chunk) & 0xFFFFFFFF
-
 
 def _scan_dir(p):
     fs = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
@@ -875,7 +777,8 @@ def main(argv=None):
                     sys.stderr.write(
                         f"[test-shuffle] parallel scan starting at seed={seed0}\n"
                     )
-                    cand = _find_seed_parallel(targets[0], seed0)
+                    from .parallel import find_shuffle_seed_parallel
+                    cand = find_shuffle_seed_parallel(targets[0], seed0)
                     seed = int(cand) & 0xFFFFFFFF
                     sys.stderr.write(
                         f"[test-shuffle] using seed={seed} (matched first script)\n"

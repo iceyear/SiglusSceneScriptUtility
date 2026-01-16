@@ -1732,44 +1732,85 @@ def _form_code_to_name(code):
     return str(code)
 
 
-def compile_one(ctx, ss_path, stop_after=None):
-    stop_after = stop_after or ctx.get("stop_after", "bs")
+def compile_one_pipeline(
+    ctx,
+    ss_path,
+    stop_after=None,
+    ia_data=None,
+    test_check=False,
+    tmp_path=None,
+    log=True,
+    record_time=False,
+):
+    """Compile a single .ss file through the CA/LA/SA/MA/BS pipeline.
+
+    This is a refactoring helper used by both the legacy serial compiler and
+    the parallel worker implementation, to keep behavior consistent.
+
+    Notes:
+        - This function does NOT write the final .dat file; it returns the
+          compiled bytes when it reaches the BS stage.
+        - When stop_after is set to 'la'/'sa'/'ma', it returns None.
+    """
+
+    stop_after = stop_after or (
+        ctx.get("stop_after", "bs") if isinstance(ctx, dict) else "bs"
+    )
     nm = os.path.splitext(os.path.basename(ss_path))[0]
     fname = os.path.basename(ss_path)
 
     def fmt_err(code, line):
         return f"{code} at {fname}:{int(line or 0)}"
 
-    enc = "utf-8" if ctx.get("utf8") else "cp932"
+    enc = "utf-8" if (isinstance(ctx, dict) and ctx.get("utf8")) else "cp932"
     scn = rd(ss_path, 0, enc=enc)
-    base = ctx.get("ia_data") if isinstance(ctx, dict) else None
+
+    # Resolve include analyzer data
+    base = ia_data
+    if not isinstance(base, dict) and isinstance(ctx, dict):
+        base = ctx.get("ia_data")
     if not isinstance(base, dict):
         base = build_ia_data(ctx)
-        ctx["ia_data"] = base
+        if isinstance(ctx, dict):
+            ctx["ia_data"] = base
+
     iad = _copy_ia_data(base)
     pcad = {}
+
+    # CA
     ca = CharacterAnalizer()
-    _log_stage("CA", ss_path)
+    if log:
+        _log_stage("CA", ss_path)
     t = time.time()
     if not ca.analize_file(scn, iad, pcad):
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
-    _record_stage_time(ctx, "CA", time.time() - t)
-    tmp = ctx.get("tmp_path") or "."
-    if ctx.get("test_check"):
+    if record_time:
+        _record_stage_time(ctx, "CA", time.time() - t)
+
+    tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
+    if test_check and isinstance(ctx, dict) and ctx.get("test_check"):
         wr(os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), 0, enc=enc)
-    _log_stage("LA", ss_path)
+
+    # LA
+    if log:
+        _log_stage("LA", ss_path)
     t = time.time()
     lad, err = la_analize(pcad)
-    _record_stage_time(ctx, "LA", time.time() - t)
+    if record_time:
+        _record_stage_time(ctx, "LA", time.time() - t)
     if err:
         raise RuntimeError(fmt_err("UNK_ERROR", err.get("line", 0)))
     if stop_after == "la":
-        return
-    _log_stage("SA", ss_path)
+        return None
+
+    # SA
+    if log:
+        _log_stage("SA", ss_path)
     t = time.time()
     sa = SA(iad, lad)
     ok, sad = sa.analize()
-    _record_stage_time(ctx, "SA", time.time() - t)
+    if record_time:
+        _record_stage_time(ctx, "SA", time.time() - t)
     if not ok:
         raise RuntimeError(
             fmt_err(
@@ -1778,14 +1819,17 @@ def compile_one(ctx, ss_path, stop_after=None):
             )
         )
     if stop_after == "sa":
-        return
-    _log_stage("MA", ss_path)
+        return None
 
+    # MA
+    if log:
+        _log_stage("MA", ss_path)
     while True:
         t = time.time()
         ma = MA(iad, lad, sad)
         ok, mad = ma.analize()
-        _record_stage_time(ctx, "MA", time.time() - t)
+        if record_time:
+            _record_stage_time(ctx, "MA", time.time() - t)
         if ok:
             break
         code = ma.last.get("type") or "UNK_ERROR"
@@ -1805,16 +1849,40 @@ def compile_one(ctx, ss_path, stop_after=None):
             if unknown_name:
                 raise RuntimeError(f"{code}({qname or unknown_name}) at {fname}:{line}")
         raise RuntimeError(fmt_err(code, line))
+
     if stop_after == "ma":
-        return
-    _log_stage("BS", ss_path)
+        return None
+
+    # BS
+    if log:
+        _log_stage("BS", ss_path)
     t = time.time()
     bs = BS()
     bsd = {}
-    if not bs.compile(iad, lad, mad, bsd, ctx.get("test_check")):
+    if not bs.compile(
+        iad, lad, mad, bsd, bool(isinstance(ctx, dict) and ctx.get("test_check"))
+    ):
         raise RuntimeError(fmt_err(bs.get_error_code(), bs.get_error_line()))
-    _record_stage_time(ctx, "BS", time.time() - t)
-    wr(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"], 1)
+    if record_time:
+        _record_stage_time(ctx, "BS", time.time() - t)
+    return {"nm": nm, "fname": fname, "out_scn": bsd.get("out_scn", b"")}
+
+
+def compile_one(ctx, ss_path, stop_after=None):
+    res = compile_one_pipeline(
+        ctx,
+        ss_path,
+        stop_after=stop_after,
+        ia_data=None,
+        test_check=True,
+        tmp_path=None,
+        log=True,
+        record_time=True,
+    )
+    if not res:
+        return
+    tmp = ctx.get("tmp_path") or "."
+    wr(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"], 1)
 
 
 def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=False):

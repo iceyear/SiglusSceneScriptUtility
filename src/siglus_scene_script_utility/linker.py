@@ -212,28 +212,23 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
         dat_path = os.path.join(bs_dir, nm + ".dat")
         if not os.path.isfile(dat_path):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
-        dat = rd(dat_path, 1)
-        dat_list.append(dat)
         enc_names.append(nm)
         if lzss_mode:
             lz_path = os.path.join(bs_dir, nm + ".lzss")
-            if os.path.isfile(lz_path):
-                lz = rd(lz_path, 1)
-            else:
-                if not easy_code:
-                    raise RuntimeError(
-                        "missing .lzss and ctx.easy_angou_code is not set"
-                    )
-                t = time.time()
-                lzss_level = ctx.get("lzss_level", 17)
-                lz = _m.lzss_pack(dat, level=lzss_level)
-                b = bytearray(lz)
-                _xor_cycle_inplace(b, easy_code, 0)
-                lz = bytes(b)
-                wr(lz_path, lz, 1)
+            # Shared helper keeps serial/parallel cache behavior aligned
+            lzss_level = ctx.get("lzss_level", 17)
+            t = time.time()
+            dat, lz, built_new = _m.load_dat_and_lzss(
+                dat_path, lz_path, easy_code, lzss_level
+            )
+            # Keep behavior identical: record timing only for newly-built cache
+            if built_new:
                 _record_stage_time(ctx, "LZSS", time.time() - t)
             _log_stage("LZSS", nm + ".ss")
             lzss_list.append(lz)
+        else:
+            dat = rd(dat_path, 1)
+        dat_list.append(dat)
     return enc_names, dat_list, lzss_list
 
 
@@ -419,21 +414,7 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
-        use_cache = False
-        if cache_path and os.path.isfile(cache_path):
-            try:
-                if os.path.getmtime(cache_path) >= os.path.getmtime(src_path):
-                    use_cache = True
-            except Exception:
-                use_cache = False
-        if use_cache:
-            enc_blob = rd(cache_path, 1)
-        else:
-            raw = rd(src_path, 1)
-            enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-            if cache_path:
-                _ensure_dir_for_file(cache_path)
-                wr(cache_path, enc_blob, 1)
+        enc_blob, _ = _m.source_angou_encrypt_with_cache(src_path, rel, cache_path, ctx)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
         (not skip) and chunks.append(enc_blob)
         _record_stage_time(ctx, "OS", time.time() - start)

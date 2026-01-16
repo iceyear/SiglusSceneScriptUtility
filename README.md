@@ -44,7 +44,6 @@ Common modes and examples:
 | Mode | Description | Example |
 | --- | --- | --- |
 | Compile | Build scripts into `.pck` | `uv run siglus-ssu -c <input_dir> <output_dir>` |
-| Compile (parallel) | Enable multi-process compile | `uv run siglus-ssu -c --parallel [--max-workers N] <input_dir> <output_dir>` |
 | Extract | Unpack `.pck` files | `uv run siglus-ssu -x <input_pck> <output_dir>` |
 | Analyze/compare | Inspect or diff files | `uv run siglus-ssu -a <file1> [file2]` |
 | Legacy | Force pure Python mode | `uv run siglus-ssu --legacy -c <input_dir> <output_dir>` |
@@ -120,4 +119,4 @@ uv run python tests/benchmark.py
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.
 
-If you want to reproduce Kinetic builds, you need to set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.
+If you want to reproduce Kinetic builds bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.
