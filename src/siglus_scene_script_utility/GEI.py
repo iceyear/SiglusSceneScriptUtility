@@ -1,7 +1,7 @@
 import os
 import struct
 from . import const as C
-from .CA import rd, wr, todo
+from .CA import rd, wr
 
 
 def _read_text(p, utf8):
@@ -101,7 +101,7 @@ class IniFileAnalizer:
 
 def xor_cycle_inplace(b, code, st=0):
     if not code:
-        todo("xor_cycle: missing code")
+        raise ValueError("xor_cycle_inplace: missing code")
     n = len(code)
     for i in range(len(b)):
         b[i] ^= code[(st + i) % n]

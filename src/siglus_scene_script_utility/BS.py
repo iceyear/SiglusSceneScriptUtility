@@ -1722,16 +1722,6 @@ def find_ss(ctx, only=None):
     return sorted(glob.glob(os.path.join(sp, "*.ss"))) if sp else []
 
 
-def _form_code_to_name(code):
-    try:
-        for k, v in (C._FORM_CODE or {}).items():
-            if int(v) == int(code):
-                return str(k)
-    except Exception:
-        pass
-    return str(code)
-
-
 def compile_one_pipeline(
     ctx,
     ss_path,

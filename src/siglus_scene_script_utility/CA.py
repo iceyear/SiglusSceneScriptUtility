@@ -1,13 +1,8 @@
 import os
 import re
-import json
 import unicodedata
 from functools import lru_cache
 from . import const as C
-
-
-def todo(s):
-    raise NotImplementedError(s)
 
 
 def absp(p):
@@ -118,89 +113,7 @@ def _parse_code(v):
         if s and len(s) % 2 == 0:
             return bytes.fromhex(s)
         return v.encode("latin1", "ignore")
-    todo("parse_code")
-
-
-def load_project(p):
-    if not p:
-        return {}
-    p = absp(p)
-    if p.lower().endswith(".json"):
-        o = json.loads(rd(p, 0))
-        for k in (
-            "scn_path",
-            "tmp_path",
-            "out_path",
-            "out_path_noangou",
-            "exe_path",
-            "work_path",
-            "utf8",
-            "test_check",
-            "lzss_mode",
-            "exe_angou_mode",
-            "source_angou_mode",
-            "original_source_mode",
-            "scn_list",
-            "inc_list",
-            "ini_list",
-            "easy_angou_code",
-            "source_angou",
-            "defined_names",
-            "stop_after",
-            "easy_link",
-        ):
-            o.setdefault(k, None)
-        if isinstance(o.get("defined_names"), list):
-            o["defined_names"] = set(o["defined_names"])
-        o["easy_angou_code"] = _parse_code(o.get("easy_angou_code"))
-        if isinstance(o.get("source_angou"), dict):
-            sa = o["source_angou"]
-            for kk in ("easy_code", "mask_code", "gomi_code", "last_code", "name_code"):
-                if kk in sa:
-                    sa[kk] = _parse_code(sa[kk])
-        return o
-    todo("load_project")
-
-
-def norm_ctx(a):
-    o = load_project(getattr(a, "project", None)) if getattr(a, "project", None) else {}
-
-    def g(k, d=None):
-        return getattr(a, k, None) if getattr(a, k, None) is not None else o.get(k, d)
-
-    sp, tp, op, ep = g("scn_path"), g("tmp_path"), g("out_path"), g("exe_path")
-    sp, tp, op, ep = (
-        (absp(sp) if sp else sp),
-        (absp(tp) if tp else tp),
-        (absp(op) if op else op),
-        (absp(ep) if ep else ep),
-    )
-    if not tp:
-        tp = absp("./tmp")
-    if not op:
-        op = absp("./out")
-    sa = o.get("source_angou") or getattr(C, "SOURCE_ANGOU", None)
-    return dict(
-        project=o,
-        scn_path=sp,
-        tmp_path=tp,
-        out_path=op,
-        exe_path=ep,
-        scn_list=o.get("scn_list") or [],
-        inc_list=o.get("inc_list") or [],
-        ini_list=o.get("ini_list") or [],
-        utf8=bool(g("utf8", False)),
-        test_check=bool(g("test_check", False)),
-        lzss_mode=bool(g("lzss_mode", True)),
-        exe_angou_mode=bool(g("exe_angou_mode", False)),
-        source_angou_mode=bool(g("source_angou_mode", True)),
-        original_source_mode=bool(g("original_source_mode", True)),
-        easy_link=bool(g("easy_link", False)),
-        easy_angou_code=o.get("easy_angou_code"),
-        source_angou=sa,
-        defined_names=o.get("defined_names") or set(),
-        stop_after=g("stop_after", "sa"),
-    )
+    raise TypeError(f"Unsupported code type: {type(v).__name__}")
 
 
 def _isalpha(c):

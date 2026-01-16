@@ -14,7 +14,7 @@ from .BS import (
     build_ia_data,
 )
 from . import CA
-from .CA import rd, wr, todo, _parse_code
+from .CA import rd, wr, _parse_code
 from .GEI import write_gameexe_dat
 from .linker import link_pack
 from .native_ops import (
@@ -23,20 +23,6 @@ from .native_ops import (
     md5_digest,
     tile_copy,
 )
-
-
-def tpc_xor_inplace(b):
-    for i in range(len(b)):
-        b[i] ^= C.TPC[i & 255]
-
-
-def easy_xor_inplace(b, ctx, st=0):
-    code = ctx.get("easy_angou_code") if isinstance(ctx, dict) else None
-    if not code:
-        from .CA import todo
-
-        todo("easy_xor: need easy_angou_code")
-    xor_cycle_inplace(b, code, st)
 
 
 def exe_angou_element(angou_bytes: bytes) -> bytes:
@@ -61,17 +47,33 @@ def exe_angou_element(angou_bytes: bytes) -> bytes:
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
     if not sa:
-        todo("source_angou: need ctx.source_angou")
+        raise ValueError(
+            "source_angou_encrypt requires ctx['source_angou'] (dict with codes and header_size)"
+        )
     eg = _parse_code(sa.get("easy_code"))
     mg = _parse_code(sa.get("mask_code"))
     gg = _parse_code(sa.get("gomi_code"))
     lg = _parse_code(sa.get("last_code"))
     ng = _parse_code(sa.get("name_code"))
-    if not all([eg, mg, gg, lg, ng]):
-        todo("source_angou: missing codes")
+    missing_codes = [
+        n
+        for n, v in (
+            ("easy_code", eg),
+            ("mask_code", mg),
+            ("gomi_code", gg),
+            ("last_code", lg),
+            ("name_code", ng),
+        )
+        if not v
+    ]
+    if missing_codes:
+        raise ValueError(
+            "source_angou_encrypt: missing codes: " + ", ".join(missing_codes)
+        )
     hs = sa.get("header_size")
     if not hs:
-        todo("source_angou: missing header_size")
+        raise ValueError("source_angou_encrypt: missing header_size")
+
     lzss_level = ctx.get("lzss_level", 17)
     lz = lzss_pack(data, level=lzss_level)
     lzsz = len(lz)
@@ -206,17 +208,6 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     return bytes(out)
 
 
-def _parse_bytes_arg(s, enc="cp932"):
-    if s is None:
-        return b""
-    if s.startswith("@"):
-        return rd(s[1:], 1)
-    h = re.sub(r"[^0-9a-fA-F]", "", s)
-    if h and len(h) % 2 == 0:
-        return bytes.fromhex(h)
-    return s.encode(enc, "ignore")
-
-
 def _is_int_token(t):
     if t is None:
         return False
@@ -226,17 +217,6 @@ def _is_int_token(t):
     if re.fullmatch(r"0[xX][0-9a-fA-F]+", s):
         return True
     return re.fullmatch(r"[0-9]+", s) is not None
-
-
-def _sha1_file(path):
-    h = hashlib.sha1()
-    with open(path, "rb") as f:
-        while True:
-            b = f.read(1024 * 1024)
-            if not b:
-                break
-            h.update(b)
-    return h.hexdigest()
 
 
 # --test-shuffle helpers (fast order check + parallel seed scan)

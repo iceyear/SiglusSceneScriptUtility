@@ -6,75 +6,6 @@ def create_elm_code(o, g, c):
     return (int(o) << 24) | (int(g) << 16) | (int(c) & 0xFFFF)
 
 
-def deref(f):
-    return (
-        C.FM_INT
-        if f == C.FM_INTREF
-        else (
-            C.FM_STR
-            if f == C.FM_STRREF
-            else (
-                C.FM_INTLIST
-                if f == C.FM_INTLISTREF
-                else C.FM_STRLIST
-                if f == C.FM_STRLISTREF
-                else f
-            )
-        )
-    )
-
-
-def _lit_int(v):
-    return {
-        "node_form": C.FM_INT,
-        "atom": {
-            "id": 0,
-            "line": 0,
-            "type": C.LA_T["VAL_INT"],
-            "opt": int(v),
-            "subopt": 0,
-        },
-    }
-
-
-def _mk_exp_from_atom(a):
-    lit = {
-        "node_form": C.FM_INT if a["type"] == C.LA_T["VAL_INT"] else C.FM_STR,
-        "atom": a,
-    }
-    smp = {
-        "node_form": lit["node_form"],
-        "node_type": C.NT_SMP_LITERAL,
-        "Literal": lit,
-        "open": None,
-        "close": None,
-        "exp": None,
-        "Goto": None,
-        "elm_exp": None,
-        "exp_list": None,
-    }
-    return {
-        "node_form": lit["node_form"],
-        "tmp_form": lit["node_form"],
-        "node_type": C.NT_EXP_SIMPLE,
-        "smp_exp": smp,
-        "opr": None,
-        "exp_1": None,
-        "exp_2": None,
-    }
-
-
-def _mk_arg(exp):
-    return {
-        "node_type": C.NT_ARG_NO_NAME,
-        "name": None,
-        "equal": None,
-        "exp": exp,
-        "name_id": 0,
-        "node_form": exp.get("node_form"),
-    }
-
-
 def _form_name(f):
     if isinstance(f, str):
         return f
@@ -1331,9 +1262,3 @@ class MA:
         if lf in (C.FM_STR, C.FM_STRREF) and rf in (C.FM_INT, C.FM_INTREF):
             return C.FM_STR if op == C.OP_MULTIPLE else C.FM_VOID
         return C.FM_VOID
-
-
-def ma_analize(piad, plad, psad):
-    m = MA(piad, plad, psad)
-    ok, ps = m.analize()
-    return ok, (ps if ok else None), m.last

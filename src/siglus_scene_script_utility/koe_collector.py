@@ -51,20 +51,6 @@ def _iter_ss_files(root: str):
                 yield os.path.join(base, fn)
 
 
-def _guess_script_root(voice_dir: str) -> str:
-    roots = [voice_dir]
-    p = os.path.abspath(os.path.join(voice_dir, os.pardir))
-    if p and p not in roots:
-        roots.append(p)
-    pp = os.path.abspath(os.path.join(p, os.pardir))
-    if pp and pp not in roots:
-        roots.append(pp)
-    for r in roots:
-        for _ in _iter_ss_files(r):
-            return r
-    return voice_dir
-
-
 def _parse_koe_line(line: str):
     m = _COORD_RE.search(line)
     if not m:
