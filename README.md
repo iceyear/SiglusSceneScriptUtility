@@ -118,4 +118,4 @@ uv run python tests/benchmark.py
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.
 
-If you want to reproduce Kinetic builds bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.
+Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.

@@ -404,7 +404,7 @@ def _print_summary(ctx):
 def main(argv=None):
     import argparse
 
-    # --test-shuffle: brute-force shuffle seed by comparing generated .dat with official ones
+    # --test-shuffle: brute-force shuffle seed
     test_shuffle = False
     test_seed0 = 0
     test_seed0_given = False
@@ -418,7 +418,11 @@ def main(argv=None):
         argv.pop(i)
         test_shuffle = True
         # optional seed token
-        if i < len(argv) and _is_int_token(argv[i]) and (len(argv) - i) >= 4:
+        if (
+            i < len(argv)
+            and _is_int_token(argv[i])
+            and (i == (len(argv) - 1) or (len(argv) - i) >= 4)
+        ):
             try:
                 test_seed0 = int(str(argv[i]), 0)
             except Exception:
@@ -426,7 +430,11 @@ def main(argv=None):
             test_seed0_given = True
             argv.pop(i)
 
-    ap = argparse.ArgumentParser(prog="sse", add_help=True)
+    class _ArgParser(argparse.ArgumentParser):
+        def error(self, message):
+            raise ValueError(message)
+
+    ap = _ArgParser(prog="sse", add_help=False)
     if test_shuffle:
         ap.add_argument("input_dir")
         ap.add_argument("output_pck")
@@ -478,7 +486,11 @@ def main(argv=None):
         ),
     )
     ap.add_argument("--gei", action="store_true", help="Only generate Gameexe.dat.")
-    a = ap.parse_args(argv)
+    try:
+        a = ap.parse_args(argv)
+    except ValueError as exc:
+        sys.stderr.write(f"{ap.prog}: error: {exc}\n")
+        return 2
 
     # Apply user-provided initial shuffle seed.
     # - Normal compile: affects the produced .dat string table order.
@@ -688,8 +700,6 @@ def main(argv=None):
                 compile_list = ss
             if compile_list:
                 if test_shuffle:
-                    # Pre-validate that we are shuffling the same string pool as official.
-                    # If the multiset of strings differs, brute-forcing seeds is pointless.
                     bs_dir = os.path.join(tmp, "bs")
                     os.makedirs(bs_dir, exist_ok=True)
 
@@ -705,9 +715,9 @@ def main(argv=None):
 
                     first_ss = compile_list[0]
                     first_nm = os.path.splitext(os.path.basename(first_ss))[0]
-                    off_first = os.path.join(test_dir, first_nm + ".dat")
-                    if not os.path.isfile(off_first):
-                        raise FileNotFoundError(f"official dat not found: {off_first}")
+                    exp_first = os.path.join(test_dir, first_nm + ".dat")
+                    if not os.path.isfile(exp_first):
+                        raise FileNotFoundError(f"expected dat not found: {exp_first}")
 
                     # compile once (seed doesn't matter for pool equality)
                     set_shuffle_seed(0)
@@ -719,7 +729,7 @@ def main(argv=None):
                     from collections import Counter
 
                     pool_my = Counter(_read_scn_dat_str_pool(my_first))
-                    pool_off = Counter(_read_scn_dat_str_pool(off_first))
+                    pool_off = Counter(_read_scn_dat_str_pool(exp_first))
                     if pool_my != pool_off:
                         sys.stderr.write(
                             "[test-shuffle] pool mismatch: not the same string pool -> skip brute force\n"
@@ -732,26 +742,32 @@ def main(argv=None):
                             for s0 in only_my:
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         if only_off:
-                            sys.stderr.write("  only-in-official (sample):\n")
+                            sys.stderr.write("  only-in-expected (sample):\n")
                             for s0 in only_off:
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         return 1
 
-                    # read official target orders in EXACT compile order
+                    # read expected target orders in EXACT compile order
                     targets = []
                     for ss_path in compile_list:
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
-                        off_dat = os.path.join(test_dir, nm + ".dat")
-                        if not os.path.isfile(off_dat):
+                        exp_dat = os.path.join(test_dir, nm + ".dat")
+                        if not os.path.isfile(exp_dat):
                             raise FileNotFoundError(
-                                f"official dat not found: {off_dat}"
+                                f"expected dat not found: {exp_dat}"
                             )
-                        targets.append(_read_scn_dat_order(off_dat))
+                        targets.append(_read_scn_dat_order(exp_dat))
 
                     # Brute-force seed ONLY for the first script.
                     # Once we have a seed that matches the first file, use it as the initial
-                    # seed and compile sequentially (no more scanning per file).
+                    # seed and compile sequentially.
                     seed0 = int(test_seed0) & 0xFFFFFFFF
+                    try:
+                        from .native_ops import is_native_available
+                    except Exception:
+                        is_native_available = None
+                    if callable(is_native_available) and is_native_available():
+                        sys.stderr.write("[test-shuffle] Accelerated by Rust\n")
                     sys.stderr.write(
                         f"[test-shuffle] parallel scan starting at seed={seed0}\n"
                     )
@@ -768,7 +784,6 @@ def main(argv=None):
                     all_ok = True
                     for i, ss_path in enumerate(compile_list):
                         compile_one(ctx, ss_path, "bs")
-                        # verify order against official (but do NOT rescan; just report)
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         my_dat = os.path.join(bs_dir, nm + ".dat")
                         if not os.path.isfile(my_dat):
