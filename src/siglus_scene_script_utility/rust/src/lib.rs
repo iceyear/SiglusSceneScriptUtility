@@ -129,6 +129,8 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
     Ok(x)
 }
 
+
+
 // ============================================================================
 // Fast seed scan for --test-shuffle (first file only)
 // ============================================================================
@@ -238,8 +240,8 @@ fn find_shuffle_seed_first(
     chunk: Option<u32>,
     progress_iv: Option<f64>,
 ) -> PyResult<Option<u32>> {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     let n = target.len();
@@ -254,7 +256,12 @@ fn find_shuffle_seed_first(
     let c = chunk.unwrap_or(8192).max(1) as u64;
     let prog = progress_iv.unwrap_or(1.0);
 
-    let total: u64 = 1u64 << 32;
+    let total_u32: u64 = 1u64 << 32;
+
+   // Scan seeds in the increasing order [seed0 .. 2^32-1].
+   // This matches the user workflow: if a candidate seed fails later, they
+   // continue from (seed+1). Wrapping is left to the caller if desired.
+    let total: u64 = total_u32.saturating_sub(seed0 as u64);
 
     let target = Arc::new(target);
     let params = Arc::new(build_shuffle_params(n));
@@ -355,18 +362,15 @@ fn find_shuffle_seed_first(
             let elapsed = t0.elapsed().as_secs_f64().max(1e-9);
             let rate = (s as f64) / elapsed;
             let remain = total.saturating_sub(s);
-            let eta = if rate > 0.0 {
-                (remain as f64) / rate
-            } else {
-                f64::NAN
-            };
+            let eta = if rate > 0.0 { (remain as f64) / rate } else { f64::NAN };
 
-            // Next seed to be tried in the global scan order (wrapping u32).
-            let next_seed = ((seed0 as u64).wrapping_add(s) & 0xFFFF_FFFF) as u32;
+            // Next seed to be tried (decimal, like seed0). When the scan completes,
+            // this will reach 2^32 (4294967296).
+            let next_seed_u64: u64 = (seed0 as u64).saturating_add(s).min(total_u32);
 
             eprintln!(
                 "[test-shuffle] next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
-                next_seed,
+                next_seed_u64,
                 elapsed,
                 rate,
                 fmt_hhmmss(eta)
@@ -381,7 +385,11 @@ fn find_shuffle_seed_first(
     }
 
     let r = found.load(Ordering::Relaxed);
-    if r == u32::MAX { Ok(None) } else { Ok(Some(r)) }
+    if r == u32::MAX {
+        Ok(None)
+    } else {
+        Ok(Some(r))
+    }
 }
 /// Python module definition
 #[pymodule]
