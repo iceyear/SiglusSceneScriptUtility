@@ -211,20 +211,6 @@ class FormTable:
                 return e, fc
         return None, None
 
-    def auto_form_property(s, name):
-        info = {
-            "type": C.ET_PROPERTY,
-            "code": create_elm_code(C.ELM_OWNER_USER_PROP, 0, s._auto_prop_code),
-            "name": name,
-            "form": name,
-            "size": 0,
-            "arg_map": {},
-            "origin": "auto",
-        }
-        s._auto_prop_code += 1
-        s.add(C.FM_SCENE, info)
-        return info
-
 
 class MA:
     def __init__(s, piad, plad, psad):

@@ -124,4 +124,5 @@ Some official builds shuffled their strings with a magical initial seed. If you 
 | --- | --- |
 | [augment_protocol_hZTHqv8A_DL](https://www.virustotal.com/gui/file/1e5d5d094e19df0e7b160022fd34ab8fb25d4af7882935692bc0182c0ad21dc8) | 1769178361 |
 | [prima02_Vwm4NjRVFPnf_Tr](https://www.virustotal.com/gui/file/968e8c2d2952ef671e9736de383361b393ea161d5948ae15c72ffb5a1ea7edde) | 1556068939 |
-| [prima01_wM5fRc2F_TR](https://www.virustotal.com/gui/file/17b401045e582e6a28217286de1fead6373d54f05d55b0a74862bbf68de397e4) | not found in u32 |
+| [prima01_wM5fRc2F_TR](https://www.virustotal.com/gui/file/17b401045e582e6a28217286de1fead6373d54f05d55b0a74862bbf68de397e4) | 2145250021 |
+| [LOOPERSPLUS_aR7#Wm9@Tq](https://www.virustotal.com/gui/file/41583cc1f18c2dd3dd5295925eb96d355727966de34b97c6c044a8072a987393) | 124576116 |

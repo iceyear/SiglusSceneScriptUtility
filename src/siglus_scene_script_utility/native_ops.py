@@ -35,11 +35,21 @@ try:
     _native_md5_digest = native_accel.md5_digest
     _native_tile_copy = native_accel.tile_copy
     _native_msvcrand_shuffle_inplace = native_accel.msvcrand_shuffle_inplace
+    _native_find_shuffle_seed_first = getattr(
+        native_accel, "find_shuffle_seed_first", None
+    )
     _USE_NATIVE = True
 except (ImportError, AttributeError):
     _USE_NATIVE = False
     _native_lzss_pack_level = None
     _native_msvcrand_shuffle_inplace = None
+    _native_find_shuffle_seed_first = None
+
+
+# True only if the Rust backend provides the seed scanner
+HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
+    _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
+)
 
 
 def is_native_available() -> bool:
@@ -495,3 +505,32 @@ def msvcrand_shuffle_inplace(state: int, a) -> int:
             # Fallback to pure Python on any unexpected native error
             return _py_msvcrand_shuffle_inplace(state, a)
     return _py_msvcrand_shuffle_inplace(state, a)
+
+
+def find_shuffle_seed_first(
+    target_idx_pairs,
+    seed0: int,
+    *,
+    workers=None,
+    chunk=None,
+    progress_iv=None,
+):
+    """Native-accelerated scan for --test-shuffle.
+
+    Scans the full u32 space starting at seed0 (wrapping). Returns int seed or None.
+    """
+    if not (_USE_NATIVE and _native_find_shuffle_seed_first is not None):
+        return None
+    try:
+        # Keep the raw (ofs,len) pairs. Order-only targets can be ambiguous when
+        # multiple entries share the same offset (common when len==0).
+        pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
+        return _native_find_shuffle_seed_first(
+            pairs,
+            int(seed0) & 0xFFFFFFFF,
+            workers,
+            chunk,
+            progress_iv,
+        )
+    except Exception:
+        return None

@@ -812,51 +812,6 @@ class SA:
         s.last = err
         return 1, p, n, None
 
-    def sa_command(s, i):
-        p = i
-        err = s.last
-        ok, p, nm = s.sa_atom(p, C.LA_T["UNKNOWN"])
-        if not ok:
-            return 0, i, None
-        ul = s.plad.get("unknown_list", [])
-        name = (
-            ul[nm["atom"].get("opt", 0)] if nm["atom"].get("opt", 0) < len(ul) else ""
-        )
-        cmd = s._find_cmd(name)
-        if cmd is None:
-            return 0, i, None
-        ok, p, al = s.sa_arg_list(p)
-        if not ok:
-            return 0, i, None
-        n = N(
-            s._a(i).get("line", 0),
-            name=nm,
-            arg_list=al,
-            cmd_id=cmd.get("id", 0),
-            form_code=cmd.get("form", C.FM_INT),
-        )
-        n["node_type"] = (
-            C.NT_COMMAND_WITH_ARG if al.get("open_p") else C.NT_COMMAND_WITHOUT_ARG
-        )
-        s.last = err
-        return 1, p, n
-
-    def sa_assign(s, i):
-        p = i
-        err = s.last
-        ok, p, el = s.sa_elm_exp(p)
-        if not ok:
-            return 0, i, None
-        ok, p, op = s.sa_assign_operator(p)
-        if not ok:
-            return 0, i, None
-        ok, p, x = s.sa_exp(p, 0)
-        if not ok:
-            return s.error("TNMSERR_SA_ASSIGN_ILLEGAL_RIGHT", s._a(p)), i, None
-        n = N(s._a(i).get("line", 0), left=el, equal=op, right=x)
-        s.last = err
-        return 1, p, n
-
     def sa_exp_list(s, i):
         p = i
         err = s.last

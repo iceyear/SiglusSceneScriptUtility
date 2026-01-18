@@ -6,6 +6,9 @@ mod xor;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// LZSS compression with default level (17)
 #[pyfunction]
@@ -129,210 +132,234 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
     Ok(x)
 }
 
-// ============================================================================
-// Fast seed scan for --test-shuffle (first file only)
-// ============================================================================
+#[inline]
+fn msvc_next(x: u32) -> u32 {
+    x.wrapping_mul(214013).wrapping_add(2531011)
+}
 
 #[inline]
-fn msvcrand_step(x: &mut u32) -> u32 {
-    // MSVC rand(): x = x * 214013 + 2531011; return (x >> 16) & 0x7FFF
-    *x = x.wrapping_mul(214013).wrapping_add(2531011);
+fn msvc_rand15(x: &mut u32) -> u32 {
+    *x = msvc_next(*x);
     (*x >> 16) & 0x7FFF
 }
 
+
 #[derive(Clone, Copy)]
-struct ShuffleStepParam {
+struct ShuffleParam {
     iu: u32,
+    mask: u32,
     chunks: u32,
     q1: u32,
     r1: u32,
 }
 
-#[inline]
-fn build_shuffle_params(n: usize) -> Vec<ShuffleStepParam> {
-    // Precompute (iu, chunks, q1, r1) for each i in 2..=n.
-    // This depends only on n and matches the original algorithm.
-    let mut out = Vec::with_capacity(n.saturating_sub(1));
+fn precompute_params(n: usize) -> Vec<ShuffleParam> {
     if n < 2 {
-        return out;
+        return Vec::new();
     }
-
-    // The original algorithm effectively uses 15-bit rand() outputs.
-    let n32: u32 = 15;
-    let i_1: u32 = 0x7FFF;
-
+    let maxv: u32 = 0x7FFF;
+    let mut out = Vec::with_capacity(n.saturating_sub(1));
     for i in 2..=n {
         let iu = i as u32;
         let mut mask: u32 = 0;
         let mut chunks: u32 = 0;
         while mask < iu - 1 && mask != u32::MAX {
-            mask = (mask << n32) | i_1;
+            mask = (mask << 15) | maxv;
             chunks += 1;
         }
-        let q1: u32 = mask / iu;
-        let r1: u32 = mask % iu;
-        out.push(ShuffleStepParam { iu, chunks, q1, r1 });
+        let q1 = mask / iu;
+        let r1 = mask % iu;
+        out.push(ShuffleParam {
+            iu,
+            mask,
+            chunks,
+            q1,
+            r1,
+        });
     }
     out
 }
 
-#[inline]
-fn msvcrand_shuffle_u32_params(mut state: u32, a: &mut [u32], params: &[ShuffleStepParam]) -> u32 {
-    let n = a.len();
-    if n < 2 {
-        return state;
+fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
+    let mut x = x0;
+    if a.len() < 2 {
+        return x;
     }
-    debug_assert!(params.len() == n.saturating_sub(1));
-
-    // The original algorithm effectively uses 15-bit rand() outputs.
-    let n32: u32 = 15;
-
-    for (idx, p) in params.iter().enumerate() {
-        let i_idx = idx + 1; // i - 1 where i starts at 2
+    // 15-bit MSVC rand()
+    for (i_idx, p) in params.iter().enumerate() {
+        let i = (i_idx + 2) as u32;
         let iu = p.iu;
-        let chunks = p.chunks;
-        let q1 = p.q1;
-        let r1 = p.r1;
-
         let j: usize;
         loop {
             let mut rnd: u32 = 0;
-            for _ in 0..chunks {
-                let r = msvcrand_step(&mut state);
-                rnd = (rnd << n32) | r;
+            for _ in 0..p.chunks {
+                let r = msvc_rand15(&mut x);
+                rnd = (rnd << 15) | r;
             }
-            let q2: u32 = rnd / iu;
-            let r2: u32 = rnd % iu;
-            if q2 < q1 || r1 == iu - 1 {
+            let q2 = rnd / iu;
+            let r2 = rnd % iu;
+            if q2 < p.q1 || p.r1 == iu - 1 {
                 j = r2 as usize;
                 break;
             }
         }
-
-        if i_idx != j {
-            a.swap(i_idx, j);
+        let ii = (i - 1) as usize;
+        if ii != j {
+            a.swap(ii, j);
         }
     }
-
-    state
+    x
 }
 
-#[inline]
-fn msvcrand_shuffle_u32(state: u32, a: &mut [u32]) -> u32 {
-    let params = build_shuffle_params(a.len());
-    msvcrand_shuffle_u32_params(state, a, &params)
+
+fn fmt_hms(secs: f64) -> String {
+    if !(secs.is_finite()) || secs <= 0.0 {
+        return "00:00:00".to_string();
+    }
+    let mut s = secs.round() as i64;
+    if s < 0 {
+        s = 0;
+    }
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let ss = s % 60;
+    format!("{h:02}:{m:02}:{ss:02}")
 }
 
-/// Find a seed that makes the MSVC-compatible shuffle of [0..n) equal to target.
+/// Fast parallel scan for --test-shuffle (first file only).
 ///
-/// This is used by --test-shuffle and intentionally matches ONLY the first file.
+/// This scans the full u32 space starting at seed0 (wrapping) and returns
+/// the first seed whose shuffle produces a string-index table matching
+/// `target_idx`.
 ///
-/// Scans the full u32 space starting at seed0, wrapping around, and returns the
-/// first matching seed if any.
+/// IMPORTANT: We match the raw (ofs,len) index table, not an inferred "order".
+/// Inferring order by sorting by ofs is ambiguous when multiple entries share
+/// the same ofs (common when len==0), which can otherwise make the brute-force
+/// search incorrectly report "no seed".
 #[pyfunction]
 fn find_shuffle_seed_first(
     py: Python<'_>,
-    target: Vec<u32>,
+    target_idx: Vec<(i32, i32)>,
     seed0: u32,
     workers: Option<usize>,
     chunk: Option<u32>,
     progress_iv: Option<f64>,
 ) -> PyResult<Option<u32>> {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
-
-    let n = target.len();
-    if n == 0 {
+    let n = target_idx.len();
+    if n < 2 {
         return Ok(Some(seed0));
     }
+    let params = Arc::new(precompute_params(n));
+    let base: Vec<u32> = (0..(n as u32)).collect();
+    let base = Arc::new(base);
+    let target = Arc::new(target_idx);
+    let target_ofs: Vec<i32> = target.iter().map(|p| p.0).collect();
+    let lens: Vec<i32> = target.iter().map(|p| p.1).collect();
+    let target_ofs = Arc::new(target_ofs);
+    let lens = Arc::new(lens);
 
-    let max_workers = std::thread::available_parallelism()
+    let cpu = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let w = workers.unwrap_or(max_workers).max(1);
-    let c = chunk.unwrap_or(8192).max(1) as u64;
-    let prog = progress_iv.unwrap_or(1.0);
+    let w = workers.unwrap_or(cpu).clamp(1, 64);
+    let chunk = chunk.unwrap_or(8192).max(1);
+    let progress_iv = progress_iv.unwrap_or(1.0);
 
-    let total_u32: u64 = 1u64 << 32;
+    let prefix: &'static str = "[test-shuffle]";
 
-    // Scan seeds in the increasing order [seed0 .. 2^32-1].
-    // This matches the user workflow: if a candidate seed fails later, they
-    // continue from (seed+1). Wrapping is left to the caller if desired.
-    let total: u64 = total_u32.saturating_sub(seed0 as u64);
-
-    let target = Arc::new(target);
-    let params = Arc::new(build_shuffle_params(n));
-    let base: Arc<Vec<u32>> = Arc::new((0..(n as u32)).collect());
-
-    let found = Arc::new(AtomicU32::new(u32::MAX));
     let stop = Arc::new(AtomicBool::new(false));
-    let next = Arc::new(AtomicU64::new(0));
-    let scanned = Arc::new(AtomicU64::new(0));
-    let active = Arc::new(AtomicUsize::new(w));
+    let found = Arc::new(AtomicBool::new(false));
+    let found_seed = Arc::new(AtomicU64::new(0));
+    let next_attempt = Arc::new(AtomicU64::new(0));
+    let done_attempts = Arc::new(AtomicU64::new(0));
+    let active = Arc::new(AtomicU64::new(w as u64));
+
+    let total: u64 = 1u64 << 32;
+    let t0 = Instant::now();
 
     let mut handles = Vec::with_capacity(w);
-    for _ in 0..w {
-        let target = Arc::clone(&target);
-        let params = Arc::clone(&params);
-        let base = Arc::clone(&base);
-        let found = Arc::clone(&found);
-        let stop = Arc::clone(&stop);
-        let next = Arc::clone(&next);
-        let scanned = Arc::clone(&scanned);
-        let active = Arc::clone(&active);
+    py.allow_threads(|| {
+        for _ in 0..w {
+            let params = Arc::clone(&params);
+            let base = Arc::clone(&base);
+            let target_ofs = Arc::clone(&target_ofs);
+            let lens = Arc::clone(&lens);
+            let stop = Arc::clone(&stop);
+            let found = Arc::clone(&found);
+            let found_seed = Arc::clone(&found_seed);
+            let next_attempt = Arc::clone(&next_attempt);
+            let done_attempts = Arc::clone(&done_attempts);
+            let active = Arc::clone(&active);
+            let seed0 = seed0;
 
-        handles.push(std::thread::spawn(move || {
-            let mut buf: Vec<u32> = vec![0; base.len()];
-
-            while !stop.load(Ordering::Relaxed) {
-                let start = next.fetch_add(c, Ordering::Relaxed);
-                if start >= total {
-                    break;
-                }
-                let end = (start + c).min(total);
-                for off in start..end {
-                    if stop.load(Ordering::Relaxed) {
-                        active.fetch_sub(1, Ordering::Relaxed);
-                        return;
+            let h = std::thread::spawn(move || {
+                let mut buf = vec![0u32; base.len()];
+                let mut ofs_out = vec![0i32; base.len()];
+                let mut local_done: u64 = 0;
+                loop {
+                    if stop.load(Ordering::Relaxed) || found.load(Ordering::Relaxed) {
+                        break;
                     }
+                    let start = next_attempt.fetch_add(chunk as u64, Ordering::Relaxed);
+                    if start >= total {
+                        break;
+                    }
+                    let end = (start + chunk as u64).min(total);
+                    for a in start..end {
+                        if stop.load(Ordering::Relaxed) || found.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        buf.copy_from_slice(&base);
+                        let seed = seed0.wrapping_add(a as u32);
+                        let _ = shuffle_inplace_vec(seed, &mut buf, &params);
 
-                    let seed = seed0.wrapping_add(off as u32);
-                    buf.copy_from_slice(&base);
-                    let _ = msvcrand_shuffle_u32_params(seed, &mut buf, &params);
-                    if buf == *target {
-                        found.store(seed, Ordering::Relaxed);
-                        stop.store(true, Ordering::Relaxed);
-                        active.fetch_sub(1, Ordering::Relaxed);
-                        return;
+                        // Build (ofs,len) table for this permutation.
+                        // Lengths are determined by the string pool, so we can reuse
+                        // the expected lengths; only offsets depend on shuffle order.
+                        let mut ofs: i32 = 0;
+                        for &orig_u32 in buf.iter() {
+                            let orig = orig_u32 as usize;
+                            ofs_out[orig] = ofs;
+                            let ln = lens[orig];
+                            if ln > 0 {
+                                ofs = ofs.wrapping_add(ln);
+                            }
+                        }
+
+                        // Compare offsets in original index order.
+                        let mut ok = true;
+                        for i0 in 0..ofs_out.len() {
+                            if ofs_out[i0] != target_ofs[i0] {
+                                ok = false;
+                                break;
+                            }
+                        }
+
+                        if ok {
+                            found_seed.store(seed as u64, Ordering::Relaxed);
+                            found.store(true, Ordering::Relaxed);
+                            stop.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        local_done += 1;
+                        if (local_done & 1023) == 0 {
+                            done_attempts.fetch_add(1024, Ordering::Relaxed);
+                        }
                     }
                 }
-                scanned.fetch_add(end - start, Ordering::Relaxed);
-            }
-
-            active.fetch_sub(1, Ordering::Relaxed);
-        }));
-    }
-
-    #[inline]
-    fn fmt_hhmmss(secs: f64) -> String {
-        if !secs.is_finite() || secs < 0.0 {
-            return "--:--:--".to_string();
+                let rem = local_done & 1023;
+                if rem != 0 {
+                    done_attempts.fetch_add(rem, Ordering::Relaxed);
+                }
+                active.fetch_sub(1, Ordering::Relaxed);
+            });
+            handles.push(h);
         }
-        let mut s = secs.round() as u64;
-        let h = s / 3600;
-        s %= 3600;
-        let m = s / 60;
-        let ss = s % 60;
-        format!("{:02}:{:02}:{:02}", h, m, ss)
-    }
+    });
 
-    let t0 = Instant::now();
-    let mut last_print = t0;
-
+    let mut last_print = Instant::now();
     loop {
-        let r = found.load(Ordering::Relaxed);
-        if r != u32::MAX {
+        if found.load(Ordering::Relaxed) {
             stop.store(true, Ordering::Relaxed);
             break;
         }
@@ -340,55 +367,45 @@ fn find_shuffle_seed_first(
             break;
         }
 
-        // Let other Python threads run and allow signals to be processed.
-        py.allow_threads(|| std::thread::sleep(Duration::from_millis(50)));
+        if progress_iv > 0.0 && last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
+            let done = done_attempts.load(Ordering::Relaxed);
+            let elapsed = t0.elapsed().as_secs_f64();
+            let rate = if elapsed > 0.0 { (done as f64) / elapsed } else { 0.0 };
+            let remain = (total - done).max(0) as f64;
+            let eta = if rate > 0.0 { remain / rate } else { f64::INFINITY };
+            let next_seed = seed0.wrapping_add(done as u32);
+            eprintln!(
+                "{} next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
+                prefix,
+                next_seed,
+                elapsed,
+                rate,
+                fmt_hms(eta)
+            );
+            last_print = Instant::now();
+        }
 
-        // Make Ctrl+C / KeyboardInterrupt work even during long native scans.
-        // (Python delivers signals to the main thread; we poll here.)
+        std::thread::sleep(Duration::from_millis(50));
         if let Err(e) = py.check_signals() {
+            // KeyboardInterrupt or other signal: stop all workers and rethrow.
             stop.store(true, Ordering::Relaxed);
             for h in handles {
                 let _ = h.join();
             }
             return Err(e);
         }
-
-        if prog > 0.0 && last_print.elapsed().as_secs_f64() >= prog {
-            // "scanned" is an internal attempt counter (from seed0). We don't print it;
-            // users want the "next_seed" semantics directly.
-            let s = scanned.load(Ordering::Relaxed).min(total);
-            let elapsed = t0.elapsed().as_secs_f64().max(1e-9);
-            let rate = (s as f64) / elapsed;
-            let remain = total.saturating_sub(s);
-            let eta = if rate > 0.0 {
-                (remain as f64) / rate
-            } else {
-                f64::NAN
-            };
-
-            // Next seed to be tried (decimal, like seed0). When the scan completes,
-            // this will reach 2^32 (4294967296).
-            let next_seed_u64: u64 = (seed0 as u64).saturating_add(s).min(total_u32);
-
-            eprintln!(
-                "[test-shuffle] next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
-                next_seed_u64,
-                elapsed,
-                rate,
-                fmt_hhmmss(eta)
-            );
-            last_print = Instant::now();
-        }
     }
 
-    // Join all workers before returning.
     for h in handles {
         let _ = h.join();
     }
-
-    let r = found.load(Ordering::Relaxed);
-    if r == u32::MAX { Ok(None) } else { Ok(Some(r)) }
+    if found.load(Ordering::Relaxed) {
+        Ok(Some(found_seed.load(Ordering::Relaxed) as u32))
+    } else {
+        Ok(None)
+    }
 }
+
 /// Python module definition
 #[pymodule]
 fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -479,55 +479,76 @@ def parallel_source_encrypt(
 
 
 def _seed_chunk_worker(args):
-    """Process worker: scan a contiguous seed range for a matching MSVC shuffle."""
-    seed_start, count, n, target = args
+    """Process worker: scan a contiguous seed range for a matching shuffle.
+
+    Fallback path only (very slow). Matches the raw (ofs,len) index table, not
+    an inferred order, to avoid ambiguity when multiple entries share the same
+    offset (common when len==0).
+    """
+    seed_start, count, n, target_pairs = args
     # Import locally to keep the function picklable on Windows (spawn)
     from .BS import _MSVCRand
 
     n = int(n)
-    target = list(target)
     ss = int(seed_start)
     cc = int(count)
+    target_pairs = [(int(o), int(ln)) for (o, ln) in list(target_pairs)]
+    target_ofs = [p[0] for p in target_pairs]
+    lens = [p[1] for p in target_pairs]
     for s in range(ss, ss + cc):
         rng = _MSVCRand(int(s) & 0xFFFFFFFF)
         a = list(range(n))
         rng.shuffle(a)
-        if a == target:
+        ofs = 0
+        ofs_out = [0] * n
+        for orig in a:
+            ofs_out[orig] = ofs
+            ln = lens[orig]
+            if ln > 0:
+                ofs += ln
+        ok = True
+        for i0 in range(n):
+            if ofs_out[i0] != target_ofs[i0]:
+                ok = False
+                break
+        if ok:
             return int(s) & 0xFFFFFFFF
     return None
 
 
 def find_shuffle_seed_parallel(
-    target_order,
-    seed0,
-    *,
+    target_idx_pairs,
+    seed0=0,
     workers=None,
     chunk=None,
     progress_iv=None,
 ):
-    """Find MSVC-compatible shuffle seed in parallel.
+    """Find shuffle seed in parallel.
 
     This powers compiler.py --test-shuffle.
 
-    Semantics (user-oriented):
-      - Only matches the FIRST file's target order.
-      - Scans seeds in increasing order from `seed0` up to 2^32-1.
-      - If later files mismatch, users continue from (seed+1).
-
-    Environment overrides:
-      - SSU_TEST_SHUFFLE_NO_RUST=1   -> force Python fallback
+    Environment overrides (kept for backwards-compat):
       - SSU_TEST_SHUFFLE_WORKERS
       - SSU_TEST_SHUFFLE_CHUNK
       - SSU_TEST_SHUFFLE_PROGRESS
 
+    Args:
+        target_idx_pairs: target permutation list[int]
+        seed0: starting seed (inclusive)
+        workers: number of processes (None => env/auto)
+        chunk: seeds per process per round (None => env/default)
+        progress_iv: seconds between progress logs (None => env/default)
+
     Returns:
-        matched seed as 32-bit int, or None if not found in [seed0..2^32-1].
+        seed (int) if found in full u32, else None.
     """
     import concurrent.futures
     import sys
     import time
 
-    target = list(target_order)
+    import math
+
+    target = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
     n = len(target)
 
     # workers
@@ -547,7 +568,7 @@ def find_shuffle_seed_parallel(
         except Exception:
             chunk = 0
         if not chunk:
-            chunk = 8192
+            chunk = 200
     chunk = max(1, int(chunk))
 
     # progress interval
@@ -561,108 +582,104 @@ def find_shuffle_seed_parallel(
 
     seed0 = int(seed0) & 0xFFFFFFFF
 
-    # ---------------------------------------------------------------------
-    # Fast path: Rust (threads, releases GIL)
-    # ---------------------------------------------------------------------
-    no_rust = os.environ.get("SSU_TEST_SHUFFLE_NO_RUST", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    prefix = "[test-shuffle]"
+    # Prefer Rust scan when the Rust backend is available.
+    # IMPORTANT: If the native module is missing, we must fall back to the Python scanner,
+    # not treat it as "no seed found".
+    try:
+        from . import native_ops as _native_ops
 
-    if not no_rust:
-        try:
-            from . import native_accel
+        find_shuffle_seed_first = getattr(_native_ops, "find_shuffle_seed_first", None)
+        has_native_scan = bool(
+            getattr(_native_ops, "HAS_NATIVE_FIND_SHUFFLE_SEED", False)
+        )
+    except Exception:
+        find_shuffle_seed_first = None
+        has_native_scan = False
 
-            fn = getattr(native_accel, "find_shuffle_seed_first", None)
-            if callable(fn):
-                r = fn(
-                    target,
-                    seed0,
-                    workers,
-                    chunk,
-                    progress_iv,
-                )
-                return (int(r) & 0xFFFFFFFF) if r is not None else None
-        except Exception:
-            # Fall through to Python fallback
-            pass
+    if has_native_scan and callable(find_shuffle_seed_first):
+        r = find_shuffle_seed_first(
+            target,
+            seed0,
+            workers=workers,
+            chunk=chunk,
+            progress_iv=progress_iv,
+        )
+        if r is not None:
+            return int(r) & 0xFFFFFFFF
+        # Native scan completed full u32 and did not find a seed.
+        return None
 
-    # ---------------------------------------------------------------------
-    # Fallback: Python ProcessPoolExecutor (slower)
-    # ---------------------------------------------------------------------
-    cur = seed0
+    # Fallback (very slow): ProcessPool scan.
     t0 = time.time()
     last = t0
-
-    total_u64 = 1 << 32
-
+    total = 2**32
     sys.stderr.write(
-        f"[test-shuffle] seed scan (python fallback): workers={workers} chunk={chunk} start={cur}\n"
+        f"{prefix} seed scan (slow python): workers={workers} chunk={chunk} start={seed0}\n"
     )
     sys.stderr.flush()
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
-        while cur < total_u64:
-            futs = []
-            for w in range(workers):
-                st = cur + w * chunk
-                if st >= total_u64:
-                    break
-                cnt = min(chunk, total_u64 - st)
-                futs.append(ex.submit(_seed_chunk_worker, (st, cnt, n, target)))
+    def _fmt_eta(sec: float) -> str:
+        if (not isinstance(sec, (int, float))) or (not math.isfinite(sec)) or sec <= 0:
+            return "00:00:00"
+        s = int(round(sec))
+        if s < 0:
+            s = 0
+        h = s // 3600
+        m = (s % 3600) // 60
+        ss = s % 60
+        return f"{h:02}:{m:02}:{ss:02}"
 
-            found = None
-            for fut in concurrent.futures.as_completed(futs):
-                r = fut.result()
-                if r is not None:
-                    found = int(r) & 0xFFFFFFFF
-                    break
+    def _scan_bits():
+        cur = seed0
+        done = 0
+        nonlocal last
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
+            while done < total:
+                futs = []
+                for w in range(workers):
+                    st = (cur + w * chunk) & 0xFFFFFFFF
+                    futs.append(
+                        ex.submit(
+                            _seed_chunk_worker,
+                            (st, chunk, n, target),
+                        )
+                    )
 
-            if found is not None:
-                for fut in futs:
-                    try:
-                        fut.cancel()
-                    except Exception:
-                        pass
-                elapsed = time.time() - t0
-                if elapsed <= 0:
-                    elapsed = 1e-9
-                tried = max(0, (cur - seed0))
-                rate = tried / elapsed
-                sys.stderr.write(
-                    f"[test-shuffle] seed found={found} elapsed={elapsed:.2f}s rate~{rate:.0f}/s\n"
-                )
-                sys.stderr.flush()
-                return found
+                found = None
+                for fut in concurrent.futures.as_completed(futs):
+                    r = fut.result()
+                    if r is not None:
+                        found = int(r) & 0xFFFFFFFF
+                        break
 
-            now = time.time()
-            if now - last >= progress_iv:
-                elapsed = now - t0
-                if elapsed <= 0:
-                    elapsed = 1e-9
-                tried = max(0, (cur - seed0))
-                rate = tried / elapsed
-                remain = total_u64 - cur
-                eta = remain / rate if rate > 0 else float("nan")
+                if found is not None:
+                    for fut in futs:
+                        try:
+                            fut.cancel()
+                        except Exception:
+                            pass
+                    return found
 
-                # Format ETA as HH:MM:SS
-                if eta != eta or eta < 0:
-                    eta_s = "--:--:--"
-                else:
-                    eta_i = int(eta + 0.5)
-                    h = eta_i // 3600
-                    m = (eta_i % 3600) // 60
-                    s = eta_i % 60
-                    eta_s = f"{h:02d}:{m:02d}:{s:02d}"
+                done += workers * chunk
+                now = time.time()
+                if now - last >= progress_iv:
+                    elapsed = now - t0
+                    if elapsed <= 0:
+                        elapsed = 1e-9
+                    rate = done / elapsed
+                    eta = (total - done) / rate if rate > 0 else float("inf")
+                    next_seed = (seed0 + (done & 0xFFFFFFFF)) & 0xFFFFFFFF
+                    sys.stderr.write(
+                        f"{prefix} next_seed={next_seed} elapsed={elapsed:.1f}s rate~{rate:.0f}/s ETA={_fmt_eta(eta)}\n"
+                    )
+                    sys.stderr.flush()
+                    last = now
 
-                sys.stderr.write(
-                    f"[test-shuffle] next_seed={cur} elapsed={elapsed:.1f}s rate~{rate:.0f}/s ETA={eta_s}\n"
-                )
-                sys.stderr.flush()
-                last = now
+                cur = (cur + workers * chunk) & 0xFFFFFFFF
+        return None
 
-            cur += workers * chunk
-
+    r = _scan_bits()
+    if r is not None:
+        return int(r) & 0xFFFFFFFF
     return None

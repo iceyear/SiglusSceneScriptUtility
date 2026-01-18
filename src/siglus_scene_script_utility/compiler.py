@@ -251,9 +251,15 @@ def _order_from_idx(idx):
     return sorted(range(len(idx)), key=lambda o: int(idx[o][0]))
 
 
-def _read_scn_dat_order(path):
+def _read_scn_dat_idx_pairs(path):
+    """Read the raw (ofs_u16, len_u16) table in original index order.
+
+    This is the canonical, non-ambiguous representation of the string table
+    layout stored in .dat. Using only the sorted order can be ambiguous when
+    multiple entries share the same ofs (common when len==0).
+    """
     _, _, idx = _read_scn_dat_str_index(path)
-    return _order_from_idx(idx)
+    return [(int(ofs), int(ln)) for (ofs, ln) in idx]
 
 
 def _read_scn_dat_str_pool(path):
@@ -404,7 +410,7 @@ def _print_summary(ctx):
 def main(argv=None):
     import argparse
 
-    # --test-shuffle: brute-force shuffle seed
+    # --test-shuffle: brute-force shuffle seed (15-bit MSVC rand())
     test_shuffle = False
     test_seed0 = 0
     test_seed0_given = False
@@ -417,6 +423,7 @@ def main(argv=None):
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
+
         # optional seed token
         if (
             i < len(argv)
@@ -429,6 +436,8 @@ def main(argv=None):
                 test_seed0 = 0
             test_seed0_given = True
             argv.pop(i)
+
+    test_shuffle_prefix = "[test-shuffle]"
 
     class _ArgParser(argparse.ArgumentParser):
         def error(self, message):
@@ -580,19 +589,6 @@ def main(argv=None):
     }
     _init_stats(ctx)
 
-    # Apply user-specified initial shuffle seed (affects .dat string table order).
-    # Note: In --test-shuffle mode, we still discover the real seed by brute force.
-    #       This value is only used as the scan starting point when seed0 isn't provided.
-    user_seed = None
-    if getattr(a, "set_shuffle", None) is not None:
-        try:
-            user_seed = int(str(getattr(a, "set_shuffle")), 0) & 0xFFFFFFFF
-        except Exception:
-            user_seed = None
-    if test_shuffle and (not test_seed0_given) and (user_seed is not None):
-        test_seed0 = int(user_seed) & 0xFFFFFFFF
-    elif (not test_shuffle) and (user_seed is not None):
-        set_shuffle_seed(int(user_seed) & 0xFFFFFFFF)
     angou_content = None
     angou_path = os.path.join(inp, "暗号.dat")
     if (not a.no_angou) and os.path.isfile(angou_path):
@@ -732,7 +728,7 @@ def main(argv=None):
                     pool_off = Counter(_read_scn_dat_str_pool(exp_first))
                     if pool_my != pool_off:
                         sys.stderr.write(
-                            "[test-shuffle] pool mismatch: not the same string pool -> skip brute force\n"
+                            f"{test_shuffle_prefix} pool mismatch: not the same string pool -> skip brute force\n"
                         )
                         # print a few examples to help debugging
                         only_my = list((pool_my - pool_off).elements())[:8]
@@ -747,7 +743,10 @@ def main(argv=None):
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         return 1
 
-                    # read expected target orders in EXACT compile order
+                    # Read expected targets in EXACT compile order.
+                    # Use the raw (ofs,len) index table rather than an inferred
+                    # "order" because order becomes ambiguous when multiple
+                    # entries share the same offset (common when len==0).
                     targets = []
                     for ss_path in compile_list:
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
@@ -756,7 +755,7 @@ def main(argv=None):
                             raise FileNotFoundError(
                                 f"expected dat not found: {exp_dat}"
                             )
-                        targets.append(_read_scn_dat_order(exp_dat))
+                        targets.append(_read_scn_dat_idx_pairs(exp_dat))
 
                     # Brute-force seed ONLY for the first script.
                     # Once we have a seed that matches the first file, use it as the initial
@@ -767,20 +766,25 @@ def main(argv=None):
                     except Exception:
                         is_native_available = None
                     if callable(is_native_available) and is_native_available():
-                        sys.stderr.write("[test-shuffle] Accelerated by Rust\n")
+                        sys.stderr.write(f"{test_shuffle_prefix} Accelerated by Rust\n")
                     sys.stderr.write(
-                        f"[test-shuffle] parallel scan starting at seed={seed0}\n"
+                        f"{test_shuffle_prefix} parallel scan starting at seed={seed0}\n"
                     )
                     from .parallel import find_shuffle_seed_parallel
 
-                    cand = find_shuffle_seed_parallel(targets[0], seed0)
-                    if cand is None:
-                        sys.stderr.write("[test-shuffle] no seed found in u32\n")
+                    sys.stderr.flush()
+                    seed = find_shuffle_seed_parallel(targets[0], seed0)
+                    if seed is None:
+                        sys.stderr.write(
+                            f"{test_shuffle_prefix} no seed found in u32\n"
+                        )
+                        sys.stderr.flush()
                         return 1
-                    seed = int(cand) & 0xFFFFFFFF
+                    seed = int(seed) & 0xFFFFFFFF
                     sys.stderr.write(
-                        f"[test-shuffle] using seed={seed} (matched first script)\n"
+                        f"{test_shuffle_prefix} using seed={seed} (matched first script)\n"
                     )
+                    sys.stderr.flush()
 
                     # compile with the discovered seed, in the same order as normal -c
                     set_shuffle_seed(seed)
@@ -794,13 +798,13 @@ def main(argv=None):
                                 f"generated dat not found: {my_dat}"
                             )
                         try:
-                            my_order = _read_scn_dat_order(my_dat)
+                            my_idx = _read_scn_dat_idx_pairs(my_dat)
                         except Exception:
-                            my_order = None
-                        if my_order != targets[i]:
+                            my_idx = None
+                        if my_idx != targets[i]:
                             all_ok = False
                             sys.stderr.write(
-                                f"[test-shuffle] order mismatch: {os.path.basename(ss_path)}\n"
+                                f"{test_shuffle_prefix} index mismatch: {os.path.basename(ss_path)}\n"
                             )
                     if not all_ok:
                         raise RuntimeError(

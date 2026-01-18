@@ -218,8 +218,6 @@ class _MSVCRand:
         return (s.x >> 16) & 0x7FFF
 
     def shuffle(s, a):
-        # Prefer Rust acceleration (native_ops) by default.
-        # Falls back to pure Python when unavailable or in legacy mode.
         from .native_ops import msvcrand_shuffle_inplace
 
         s.x = msvcrand_shuffle_inplace(s.x, a)
@@ -229,17 +227,13 @@ _MSR = _MSVCRand()
 
 
 def set_shuffle_seed(seed=1):
-    """Reset the MSVC-compatible shuffle PRNG seed.
-
-    This affects the per-script string table order used when generating .dat.
-    The default behavior matches the historical compiler.
-    """
     global _MSR
     try:
-        seed_i = int(seed, 0) if isinstance(seed, str) else int(seed)
+        seed_i = int(seed) & 0xFFFFFFFF
     except Exception:
         seed_i = 1
     _MSR = _MSVCRand(seed_i)
+    return seed_i
 
 
 def _u16(t):
@@ -298,19 +292,8 @@ class BinaryStream:
     def push_u8(s, v):
         s.buf.extend(struct.pack("<B", int(v) & 0xFF))
 
-    def push_u16(s, v):
-        s.buf.extend(struct.pack("<H", int(v) & 0xFFFF))
-
     def push_i32(s, v):
         s.buf.extend(struct.pack("<i", int(v)))
-
-    def push_bytes(s, b):
-        if b:
-            s.buf.extend(b)
-
-    def push_utf16_raw(s, t):
-        if t:
-            s.buf.extend(t.encode("utf-16le", "surrogatepass"))
 
     def write_i32_at(s, ofs, v):
         s.buf[ofs : ofs + 4] = struct.pack("<i", int(v))
@@ -503,12 +486,6 @@ class BS:
     def scn_size(s):
         return s.out_scn["scn"].size()
 
-    def scn_write_i32_at(s, ofs, v):
-        s.out_scn["scn"].write_i32_at(ofs, v)
-
-    def scn_write_u8_at(s, ofs, v):
-        s.out_scn["scn"].write_u8_at(ofs, v)
-
     def _first_atom(s, node):
         if isinstance(node, dict):
             a = node.get("atom")
@@ -698,13 +675,6 @@ class BS:
                 if not s.bs_sentence(sn):
                     return False
             return True
-        return True
-
-    def bs_s(s, node):
-        if isinstance(node, dict) and "sentense_list" in node:
-            return s.bs_ss(node)
-        if isinstance(node, dict) and "node_line" in node and "sentense" in node:
-            return s.bs_sentence(node)
         return True
 
     def bs_label(s, label):

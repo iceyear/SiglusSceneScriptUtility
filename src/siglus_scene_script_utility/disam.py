@@ -450,50 +450,6 @@ def disassemble_scn_bytes(
                 return False
         return True
 
-    def _score_ec_candidate(ec, call_sig, ret_form, named_cnt, hint_parent):
-        try:
-            ec = int(ec)
-        except Exception:
-            return -9999
-        score = 0
-        if ec == 0:
-            score -= 5
-        if ec in elm_map:
-            score += 5
-            if ec >= 0x01000000:
-                score += 8
-        if ec in elm_multi:
-            best = 0
-            cands = elm_multi.get(ec) or []
-            for c in cands:
-                s = 0
-                sigs = c.get("sigs") or []
-                if sigs:
-                    if any(_sig_exact_match(sig, call_sig) for sig in sigs):
-                        s += 60
-                    elif any(len(sig) == len(call_sig) for sig in sigs):
-                        s += 12
-                if hint_parent and c.get("parent") == hint_parent:
-                    s += 18
-                if named_cnt and c.get("has_named"):
-                    s += 4
-                try:
-                    if (
-                        isinstance(c.get("ret"), int)
-                        and ret_form is not None
-                        and int(c.get("ret")) == int(ret_form)
-                    ):
-                        s += 6
-                except Exception:
-                    pass
-                if s > best:
-                    best = s
-            score += best
-        else:
-            if ec >= 0x01000000:
-                score += 40
-        return score
-
     def _resolve_ename(ec, argc, arg_forms, ret_form, named_cnt, stack):
         if ec is None:
             return ""
