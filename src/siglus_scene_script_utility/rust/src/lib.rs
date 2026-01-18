@@ -6,8 +6,8 @@ mod xor;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// LZSS compression with default level (17)
@@ -143,11 +143,9 @@ fn msvc_rand15(x: &mut u32) -> u32 {
     (*x >> 16) & 0x7FFF
 }
 
-
 #[derive(Clone, Copy)]
 struct ShuffleParam {
     iu: u32,
-    mask: u32,
     chunks: u32,
     q1: u32,
     r1: u32,
@@ -171,7 +169,6 @@ fn precompute_params(n: usize) -> Vec<ShuffleParam> {
         let r1 = mask % iu;
         out.push(ShuffleParam {
             iu,
-            mask,
             chunks,
             q1,
             r1,
@@ -210,7 +207,6 @@ fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
     }
     x
 }
-
 
 fn fmt_hms(secs: f64) -> String {
     if !(secs.is_finite()) || secs <= 0.0 {
@@ -278,7 +274,7 @@ fn find_shuffle_seed_first(
     let t0 = Instant::now();
 
     let mut handles = Vec::with_capacity(w);
-    py.allow_threads(|| {
+    py.detach(|| {
         for _ in 0..w {
             let params = Arc::clone(&params);
             let base = Arc::clone(&base);
@@ -290,7 +286,6 @@ fn find_shuffle_seed_first(
             let next_attempt = Arc::clone(&next_attempt);
             let done_attempts = Arc::clone(&done_attempts);
             let active = Arc::clone(&active);
-            let seed0 = seed0;
 
             let h = std::thread::spawn(move || {
                 let mut buf = vec![0u32; base.len()];
@@ -370,9 +365,17 @@ fn find_shuffle_seed_first(
         if progress_iv > 0.0 && last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
             let done = done_attempts.load(Ordering::Relaxed);
             let elapsed = t0.elapsed().as_secs_f64();
-            let rate = if elapsed > 0.0 { (done as f64) / elapsed } else { 0.0 };
-            let remain = (total - done).max(0) as f64;
-            let eta = if rate > 0.0 { remain / rate } else { f64::INFINITY };
+            let rate = if elapsed > 0.0 {
+                (done as f64) / elapsed
+            } else {
+                0.0
+            };
+            let remain = (total - done) as f64;
+            let eta = if rate > 0.0 {
+                remain / rate
+            } else {
+                f64::INFINITY
+            };
             let next_seed = seed0.wrapping_add(done as u32);
             eprintln!(
                 "{} next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
